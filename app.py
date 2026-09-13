@@ -9,11 +9,30 @@ log = logging.getLogger("snapdeploy")
 UPSTREAM_BASE_URL = "https://trm-team-file-to-link.onrender.com"
 PORT = int(os.environ.get("PORT", 8080))
 
-# Headers we should not blindly forward in either direction.
+# True hop-by-hop headers only (RFC 7230 §6.1) — these must NOT be forwarded
+# in either direction. Content-Length, Content-Range, and Accept-Ranges are
+# end-to-end headers and must always be preserved.
 HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
+    "te", "trailers", "transfer-encoding", "upgrade", "host",
 }
+
+
+_session: aiohttp.ClientSession | None = None
+
+
+async def get_session() -> aiohttp.ClientSession:
+    """Reuse one ClientSession (with connection pooling) across all requests
+    instead of opening a fresh TCP/TLS connection to upstream every time."""
+    global _session
+    if _session is None or _session.closed:
+        _session = aiohttp.ClientSession()
+    return _session
+
+
+async def on_cleanup(app: web.Application):
+    if _session is not None and not _session.closed:
+        await _session.close()
 
 
 async def health(request: web.Request) -> web.Response:
@@ -36,20 +55,24 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         if k.lower() not in HOP_BY_HOP
     }
 
-    body = await request.read() if request.can_read_body else None
+    # Only bodies for methods that actually carry one — avoids any chance
+    # of blocking on a body read for GET/HEAD, which is what was making
+    # HTML pages (served via GET) hang.
+    body = None
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        body = await request.read()
 
-    session = aiohttp.ClientSession()
+    session = await get_session()
     try:
         upstream_resp = await session.request(
             request.method,
             upstream_url,
             headers=forward_headers,
             data=body,
-            timeout=aiohttp.ClientTimeout(total=None),
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=30),
             allow_redirects=False,
         )
     except aiohttp.ClientError as e:
-        await session.close()
         log.error("Failed to reach upstream for %s: %s", request.rel_url, e)
         return web.json_response({"error": "upstream unreachable"}, status=502)
 
@@ -62,6 +85,13 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         status=upstream_resp.status,
         headers=response_headers,
     )
+
+    # If upstream didn't give us a Content-Length (e.g. it's itself streaming
+    # chunked HTML), tell aiohttp explicitly to use chunked encoding so the
+    # response has a defined end instead of hanging open.
+    if "content-length" not in response_headers:
+        response.enable_chunked_encoding()
+
     await response.prepare(request)
 
     try:
@@ -71,7 +101,6 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         log.info("Client or upstream disconnected mid-stream for %s", request.rel_url)
     finally:
         upstream_resp.close()
-        await session.close()
 
     await response.write_eof()
     return response
@@ -82,6 +111,7 @@ def create_app() -> web.Application:
     app.router.add_get("/health", health)
     # Catch-all: any method, any path, forwarded verbatim to upstream.
     app.router.add_route("*", "/{path:.*}", proxy_handler)
+    app.on_cleanup.append(on_cleanup)
     return app
 
 
