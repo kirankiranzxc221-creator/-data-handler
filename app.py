@@ -20,28 +20,37 @@ async def health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
-async def stream_handler(request: web.Request) -> web.StreamResponse:
+async def proxy_handler(request: web.Request) -> web.StreamResponse:
     """
-    GET /stream/{message_id}
-    Forwards the request (with Range header intact) to the Render backend
-    and relays the response back to the Cloudflare Worker chunk-for-chunk.
+    Catch-all reverse proxy.
+    Forwards ANY path + query string (e.g. /watch/..., /<id>/<filename>?hash=...,
+    /stream/{message_id}) to the Render backend, preserving method, headers
+    (including Range), and query params, then relays the response back
+    chunk-by-chunk exactly as received.
     """
-    message_id = request.match_info["message_id"]
-    upstream_url = f"{UPSTREAM_BASE_URL}/stream/{message_id}"
+    # request.rel_url includes the path plus the original query string.
+    upstream_url = f"{UPSTREAM_BASE_URL}{request.rel_url}"
 
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in HOP_BY_HOP
     }
 
+    body = await request.read() if request.can_read_body else None
+
     session = aiohttp.ClientSession()
     try:
-        upstream_resp = await session.get(
-            upstream_url, headers=forward_headers, timeout=aiohttp.ClientTimeout(total=None)
+        upstream_resp = await session.request(
+            request.method,
+            upstream_url,
+            headers=forward_headers,
+            data=body,
+            timeout=aiohttp.ClientTimeout(total=None),
+            allow_redirects=False,
         )
     except aiohttp.ClientError as e:
         await session.close()
-        log.error("Failed to reach upstream for message %s: %s", message_id, e)
+        log.error("Failed to reach upstream for %s: %s", request.rel_url, e)
         return web.json_response({"error": "upstream unreachable"}, status=502)
 
     response_headers = {
@@ -59,7 +68,7 @@ async def stream_handler(request: web.Request) -> web.StreamResponse:
         async for chunk in upstream_resp.content.iter_chunked(64 * 1024):
             await response.write(chunk)
     except (ConnectionResetError, aiohttp.ClientError):
-        log.info("Client or upstream disconnected mid-stream for message %s", message_id)
+        log.info("Client or upstream disconnected mid-stream for %s", request.rel_url)
     finally:
         upstream_resp.close()
         await session.close()
@@ -71,10 +80,10 @@ async def stream_handler(request: web.Request) -> web.StreamResponse:
 def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/health", health)
-    app.router.add_get("/stream/{message_id}", stream_handler)
+    # Catch-all: any method, any path, forwarded verbatim to upstream.
+    app.router.add_route("*", "/{path:.*}", proxy_handler)
     return app
 
 
 if __name__ == "__main__":
     web.run_app(create_app(), host="0.0.0.0", port=PORT)
-
