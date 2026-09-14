@@ -1,165 +1,137 @@
-import os
-import logging
-import traceback
-import asyncio
+import os, asyncio, logging
 from aiohttp import web
-import aiohttp
-from multidict import CIMultiDict
-
-UPSTREAM_BASE_URL = "https://trm-team-file-to-link.onrender.com"
-PORT = int(os.environ.get("PORT", 5000))
+from pyrogram import Client
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("snapdeploy")
+log = logging.getLogger("SnapDeploy-Stream")
 
-# True hop-by-hop headers மட்டும் (RFC 7230 §6.1) — இவை மட்டும் forward பண்ணக்கூடாது.
-# Content-Length, Content-Range, Accept-Ranges ஆகியவை end-to-end headers,
-# இவற்றை எப்போதும் preserve பண்ணனும்.
-HOP_BY_HOP = {
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade", "host",
-}
+# ============================================================
+# 1. HARDCODED CREDENTIALS
+# ============================================================
+API_ID = 9649038
+API_HASH = "a5e111e536a6f95aec711676e43a0666"
+BOT_TOKEN = "8808144589:AAEJG4px0Eaya1icF7W7iV6mlwCLwxT2vqY"
+CHANNEL_ID = -1003649271176
 
-_session = None
+CHUNK_SIZE = 1024 * 1024  # 1MB Buffer for max speed
 
+# SnapDeploy தானாகவே போர்ட்டை அசைன் செய்யும், இல்லையென்றால் 8080 எடுக்கும்
+PORT = int(os.environ.get("PORT", 8080))
 
-async def get_session():
-    global _session
-    if _session is None or _session.closed:
-        # --- Speed optimizations ---
-        # limit=0: connection count-ஐ artificially restrict பண்ணாது.
-        # limit_per_host: ஒரே upstream host-க்கு பல connections parallel-ஆ வைச்சு reuse
-        #          பண்ண அனுமதிக்கும் — ஒவ்வொரு request-க்கும் புது TCP/TLS handshake
-        #          பண்ணாம connection pool-ல் இருந்து reuse ஆகும்.
-        # keepalive_timeout: idle connections-ஐ pool-ல் அதிக நேரம் வச்சிருக்கும்.
-        # ttl_dns_cache: DNS lookup-ஐ ஒவ்வொரு request-க்கும் மறுபடி பண்ணாம cache பண்ணும்.
-        connector = aiohttp.TCPConnector(
-            limit=0,
-            limit_per_host=32,
-            keepalive_timeout=75,
-            ttl_dns_cache=300,
-            enable_cleanup_closed=True,
-        )
-        # auto_decompress=False: இல்லேன்னா aiohttp client தானாக gzip/br decompress
-        # பண்ணிடும், ஆனா நாம upstream-ல் இருந்து வந்த Content-Encoding/Content-Length
-        # headers-ஐ அப்படியே forward பண்றோம் — decompressed body + compressed headers
-        # mismatch ஆகி client-side-ல் broken response-க்கு வழிவகுக்கும்.
-        _session = aiohttp.ClientSession(
-            auto_decompress=False,
-            connector=connector,
-            read_bufsize=2 ** 20,  # 1 MB
-        )
-    return _session
+# ============================================================
+# 2. DUMMY BOT INITIALIZATION
+# ============================================================
+bot = Client("dummy_stream_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
-
-async def on_cleanup(app):
-    if _session is not None and not _session.closed:
-        await _session.close()
-
-
-async def health(request):
-    return web.json_response({"status": "ok"})
-
-
-async def proxy_handler(request):
-    """
-    Catch-all reverse proxy.
-    /watch/..., /<id>/<filename>?hash=..., /stream/{message_id} — எல்லாமே
-    இதன் மூலமா Render backend-க்கு forward ஆகும், response chunk-by-chunk
-    திரும்ப அனுப்பப்படும்.
-
-    இந்த handler-ல் எந்த ஒரு exception-ஆ இருந்தாலும் வெளியே leak ஆகாது.
-    """
-    response = None
-    upstream_resp = None
+# ============================================================
+# 3. DIRECT TELEGRAM STREAMING LOGIC
+# ============================================================
+async def stream_handler(request):
+    message_id = int(request.match_info["message_id"])
+    
     try:
-        upstream_url = f"{UPSTREAM_BASE_URL}{request.rel_url}"
+        message = await bot.get_messages(CHANNEL_ID, message_id)
+    except Exception as e:
+        raise web.HTTPNotFound(text=f"Error fetching message: {str(e)}")
 
-        # Range header (எ.கா. "bytes=1048576-") இங்க தானா forward ஆகுது — இது
-        # HOP_BY_HOP செட்-ல் இல்லாததால் கீழே உள்ள dict comprehension-ல் தானே
-        # உள்ளடங்கும். Video player seek பண்ணும்போது இந்த header தான் அனுப்பப்படும்,
-        # upstream அதுக்கு 206 Partial Content + Content-Range header-ஓட பதில்
-        # கொடுக்கும், அதுவும் கீழே response_headers-ல் அப்படியே preserve ஆகும்.
-        forward_headers = CIMultiDict(
-            (k, v) for k, v in request.headers.items()
-            if k.lower() not in HOP_BY_HOP
-        )
+    if not message or message.empty:
+        raise web.HTTPNotFound(text="Message not found in Telegram Channel")
+        
+    media = message.video or message.document or message.audio or message.animation
+    if not media:
+        raise web.HTTPNotFound(text="No media found in this message")
+        
+    file_size = getattr(media, "file_size", 0)
+    file_name = getattr(media, "file_name", f"video_{message_id}.mp4")
+    mime_type = getattr(media, "mime_type", "video/mp4")
 
-        body = None
-        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-            body = await request.read()
+    # Range logic for VLC/MX Player Seeking
+    range_header = request.headers.get("Range")
+    start, end = 0, file_size - 1
+    if range_header:
+        range_val = range_header.replace("bytes=", "").split("-")
+        start = int(range_val[0]) if range_val[0] else 0
+        end = int(range_val[1]) if len(range_val) > 1 and range_val[1] else file_size - 1
 
-        session = await get_session()
+    content_length = (end - start) + 1
+    status = 206 if range_header else 200
+    headers = {
+        "Content-Type": mime_type,
+        "Content-Length": str(content_length),
+        "Content-Disposition": f'inline; filename="{file_name}"',
+        "Accept-Ranges": "bytes",
+        "Access-Control-Allow-Origin": "*",
+    }
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 
-        try:
-            upstream_resp = await session.request(
-                request.method,
-                upstream_url,
-                headers=forward_headers,
-                data=body,
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120),
-                allow_redirects=False,
-            )
-        except asyncio.TimeoutError:
-            log.error("Upstream timed out for %s", request.rel_url)
-            return web.json_response({"error": "upstream timeout"}, status=504)
-        except aiohttp.ClientError as e:
-            log.error("Failed to reach upstream for %s: %s", request.rel_url, e)
-            return web.json_response({"error": "upstream unreachable"}, status=502)
+    response = web.StreamResponse(status=status, headers=headers)
+    await response.prepare(request)
 
-        # CIMultiDict ஆல் duplicate headers (எ.கா. பல Set-Cookie) இழக்காம பாதுகாக்கப்படும்.
-        # Content-Range, Accept-Ranges, Content-Length ஆகியவை HOP_BY_HOP-ல் இல்லாததால்
-        # இங்கயும் அப்படியே client-க்கு போகும் — seeking/206 சரியா வேலை செய்யும்.
-        response_headers = CIMultiDict(
-            (k, v) for k, v in upstream_resp.headers.items()
-            if k.lower() not in HOP_BY_HOP
-        )
+    offset = start // CHUNK_SIZE
+    first_chunk_cut = start % CHUNK_SIZE
+    remaining = content_length
+    first = True
 
-        response = web.StreamResponse(
-            status=upstream_resp.status,
-            headers=response_headers,
-        )
-
-        if "content-length" not in response_headers:
-            response.enable_chunked_encoding()
-
-        await response.prepare(request)
-
-        # --- True pass-through streaming ---
-        # iter_any() network-ல் இருந்து எந்த அளவு bytes கிடைக்குதோ அதையே உடனடியா
-        # yield பண்ணும், எந்த buffering/re-chunking/fixed-size காத்திருப்பும் இல்லை.
-        # Render எந்த chunk size-ல் அனுப்புதோ, அதே boundaries-ல் client-க்கு போகும்.
-        try:
-            async for chunk in upstream_resp.content.iter_any():
+    try:
+        async for chunk in bot.stream_media(message, offset=offset):
+            if not chunk: continue
+            if first:
+                chunk = chunk[first_chunk_cut:]
+                first = False
+            if len(chunk) > remaining:
+                chunk = chunk[:remaining]
+            if chunk:
                 await response.write(chunk)
-        except (ConnectionResetError, aiohttp.ClientError):
-            log.info("Client or upstream disconnected mid-stream for %s", request.rel_url)
-
-        await response.write_eof()
-        return response
-
-    except Exception:
-        log.error("Unhandled error in proxy_handler for %s:\n%s",
-                   request.rel_url, traceback.format_exc())
-        if response is not None and response.prepared:
-            try:
-                await response.write_eof()
-            except Exception:
-                pass
-            return response
-        return web.json_response({"error": "internal proxy error"}, status=500)
+                remaining -= len(chunk)
+            if remaining <= 0:
+                break
+    except (ConnectionResetError, asyncio.CancelledError):
+        log.info(f"Client disconnected - message {message_id}")
+    except Exception as e:
+        log.error(f"Stream error: {e}")
     finally:
-        if upstream_resp is not None:
-            upstream_resp.close()
+        try:
+            await response.write_eof()
+        except:
+            pass
+            
+    return response
 
+async def root_handler(request):
+    return web.json_response({
+        "server": "SnapDeploy Direct Streamer",
+        "status": "Online",
+        "port": PORT
+    })
 
-def create_app():
+# ============================================================
+# 4. APP & SERVER SETUP
+# ============================================================
+async def init_app():
     app = web.Application()
-    app.router.add_get("/health", health)
-    app.router.add_route("*", "/{path:.*}", proxy_handler)
-    app.on_cleanup.append(on_cleanup)
+    app.router.add_get("/", root_handler)
+    app.router.add_get(r"/stream/{message_id:\d+}", stream_handler)
+    app.router.add_get(r"/stream/{message_id:\d+}/{tail:.*}", stream_handler)
+    app.router.add_head(r"/stream/{message_id:\d+}", stream_handler)
+    app.router.add_head(r"/stream/{message_id:\d+}/{tail:.*}", stream_handler)
     return app
 
+async def main():
+    print("🤖 Starting Pyrogram Dummy Bot...")
+    await bot.start()
+    
+    app = await init_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    # SnapDeploy-ல் 0.0.0.0-ல் தான் சர்வர் ரன் ஆக வேண்டும்
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"✅ aiohttp Streaming Server running on port {PORT}")
+    
+    # Keep the server running forever
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    web.run_app(create_app(), host="0.0.0.0", port=PORT)
+    asyncio.run(main())
