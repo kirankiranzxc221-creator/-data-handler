@@ -210,10 +210,3 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
-
-**Deploy this, then send `/start` and check your logs immediately:**
-
-- **If you see nothing at all under `[RAW UPDATE RECEIVED]`** — Telegram's MTProto socket isn't delivering updates to this process at the transport level. That confirms it's Render's network layer (or the free-tier spin-down), not your code. Next step: confirm this is a Background Worker (not a Web Service) if possible, or at minimum keep the keepalive above running and retest.
-- **If you see `[RAW UPDATE RECEIVED]` but never `[HANDLE_TEXT TRIGGERED]`** — updates are arriving fine and the bug is a filter/dispatch issue in the handler registration, which we can then fix precisely instead of guessing.
-
-Report back which of the two you see and I can narrow it down from there rather than throwing more speculative fixes at it.
