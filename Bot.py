@@ -6,16 +6,17 @@ import asyncio
 import urllib.parse
 import aiohttp
 from aiohttp import web
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ---------------- CONFIG ----------------
-API_ID = 9649038
+# இங்கே உங்களது உண்மையான வேல்யூக்களை கொடுங்கள் (Hardcoded)
+API_ID = 9649038   # உங்களது API ID நம்பரை இங்கே மாற்றுங்கள் (quotes வேண்டாம்)
 API_HASH = "a5e111e536a6f95aec711676e43a0666"
 BOT_TOKEN = "8296387630:AAHWE_36tjdgjWVTS0gXQD5S-xanIZzJl1g"
 
-WORKER_BASE_URL = os.environ.get("WORKER_BASE_URL", "https://my-worker.dev")
-RENDER_APP_BASE_URL = os.environ.get("RENDER_APP_BASE_URL", "https://my-render-app.onrender.com")
+WORKER_BASE_URL = os.environ.get("WORKER_BASE_URL", "https://v.trmteam1.workers.dev")
+RENDER_APP_BASE_URL = os.environ.get("RENDER_APP_BASE_URL", "https://link-to-link.onrender.com")
 PORT = int(os.environ.get("PORT", "8080"))
 
 DL_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dl.html")
@@ -31,7 +32,6 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
 )
-
 
 def gen_short_id(length: int = 8) -> str:
     chars = string.ascii_letters + string.digits
@@ -152,8 +152,9 @@ async def run_web_server():
 async def main():
     await run_web_server()
     await bot.start()
-    print("Bot started.")
-    await asyncio.Event().wait()  # run forever
+    print("Bot started and listening for messages...")
+    await idle()  # Pyrogram-ஐ ஸ்லீப் ஆகாமல் தடுக்கும் வரி
+    await bot.stop()
 
 
 if __name__ == "__main__":
