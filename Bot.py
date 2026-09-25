@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # ---------------- CONFIG ----------------
 API_ID = 9649038  # உங்கள் உண்மையான நம்பரை கொடுக்கவும்
 API_HASH = "a5e111e536a6f95aec711676e43a0666"
-BOT_TOKEN = "8296387630:AAHWE_36tjdgjWVTS0gXQD5S-xanIZzJl1g"
+BOT_TOKEN = "8296387630:AAHGr814iUrTBk_CgKWoGyp8IKQX3cAa1Ew"
 
 WORKER_BASE_URL = os.environ.get("WORKER_BASE_URL", "https://v.trmteam1.workers.dev")
 RENDER_APP_BASE_URL = os.environ.get("RENDER_APP_BASE_URL", "https://link-to-link.onrender.com")
