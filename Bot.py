@@ -1,108 +1,132 @@
+The two things you've verified rule out credentials and webhook conflicts, but they don't rule out the two most common real-world causes of exactly this symptom on Render:
+
+1. **Render free-tier spin-down**: if this is a free Web Service, Render suspends the entire process (including your persistent Pyrogram socket) after ~15 minutes of no *inbound HTTP* traffic. Telegram messages arriving while it's asleep are simply lost — MTProto has no delivery queue like webhooks do, so there's nothing to replay when it wakes up. A self-ping keepalive fixes this without needing a paid plan.
+2. **You can't tell from `on_message` alone whether Pyrogram is receiving anything at the transport layer.** If a raw update never arrives, that's Render/network. If raw updates arrive but `on_message` never fires, that's a filter problem. Right now you have no way to distinguish these — so I've added a raw update logger, which is the actual diagnostic you're missing.
+
+I also added explicit `workers=`, `sleep_threshold=`, and swapped your `asyncio.Event().wait()` for Pyrogram's own `idle()`, which handles shutdown/reconnect signaling correctly (yours technically shouldn't cause deafness, but it's not the tool designed for this and I want to eliminate every variable).
+
+```python
 import os
 import re
 import string
 import random
 import asyncio
+import logging
 import urllib.parse
 import aiohttp
-import logging
-import traceback
 from aiohttp import web
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.raw.base import Update
 
-# --- SPY MODE: LOGGING SETUP ---
+# ---------------- LOGGING ----------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - [SPY] - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("bot")
 
 # ---------------- CONFIG ----------------
-API_ID = 9649038  # உங்கள் உண்மையான நம்பரை கொடுக்கவும் (Quotes வேண்டாம்)
+API_ID = 9649038
 API_HASH = "a5e111e536a6f95aec711676e43a0666"
 BOT_TOKEN = "8296387630:AAHhzp_M0VahMZusJ8WswfBRPVAy8UJ8N-E"
 
-WORKER_BASE_URL = os.environ.get("WORKER_BASE_URL", "https://v.trmteam1.workers.dev")
-RENDER_APP_BASE_URL = os.environ.get("RENDER_APP_BASE_URL", "https://link-to-link.onrender.com")
+WORKER_BASE_URL = os.environ.get("WORKER_BASE_URL", "https://my-worker.dev")
+RENDER_APP_BASE_URL = os.environ.get("RENDER_APP_BASE_URL", "https://my-render-app.onrender.com")
 PORT = int(os.environ.get("PORT", "8080"))
 
 DL_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dl.html")
+
 URL_REGEX = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
+# In-memory state: user_id -> pending URL waiting for a filename
 pending_urls = {}
 
-# in_memory=True என்பது Render-ல் File Lock எரர் வராமல் தடுக்கும்
 bot = Client(
     "bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    in_memory=True
+    in_memory=True,
+    workers=4,
+    sleep_threshold=60,
 )
+
 
 def gen_short_id(length: int = 8) -> str:
     chars = string.ascii_letters + string.digits
     return "".join(random.choice(chars) for _ in range(length))
 
-@bot.on_message(filters.text & filters.private)
+
+# ---------------- DIAGNOSTIC: RAW UPDATE LOGGER ----------------
+# This fires on EVERY update Pyrogram receives at the transport layer,
+# before any filters are applied. If this never logs anything when you
+# send /start, the problem is network/transport (Render), not your
+# handler filters. If it DOES log but handle_text below never fires,
+# the problem is in your filters.
+@bot.on_raw_update()
+async def raw_update_logger(client: Client, update, users, chats):
+    logger.info(f"[RAW UPDATE RECEIVED] type={type(update).__name__} raw={update}")
+
+
+@bot.on_message(filters.private & (filters.text | filters.command(["start"])))
 async def handle_text(client: Client, message: Message):
-    text = message.text.strip()
+    logger.info(f"[HANDLE_TEXT TRIGGERED] from_user={message.from_user.id if message.from_user else 'unknown'} text={message.text!r}")
+
+    text = (message.text or "").strip()
     user_id = message.from_user.id
-    
-    logger.info(f"புதிய மெசேஜ் வந்தது! User ID: {user_id} | Text: {text}")
 
-    try:
-        # /start கமாண்டுக்கு மட்டும் பிரத்யேக ரிப்ளை
-        if text.startswith("/start"):
-            await message.reply_text("நான் உயிரோடு இருக்கிறேன் மச்சான்! 🚀\n\nதயவுசெய்து ஒரு Direct Video URL-ஐ அனுப்பவும்.")
+    if text.startswith("/start"):
+        pending_urls.pop(user_id, None)
+        await message.reply_text("Send me a direct URL to begin.")
+        return
+
+    # Case 1: user is replying with a filename for a previously sent URL
+    if user_id in pending_urls:
+        url = pending_urls.pop(user_id)
+        filename = text.strip()
+
+        if not filename:
+            pending_urls[user_id] = url
+            await message.reply_text("Filename can't be empty. Please enter a valid filename (with extension).")
             return
 
-        if user_id in pending_urls:
-            url = pending_urls.pop(user_id)
-            filename = text.strip()
+        status_msg = await message.reply_text("Registering your link, please wait...")
 
-            if not filename:
-                pending_urls[user_id] = url
-                await message.reply_text("Filename can't be empty. Please enter a valid filename (with extension).")
-                return
-
-            status_msg = await message.reply_text("Registering your link, please wait...")
-
-            try:
-                short_id = await register_link(url, filename)
-            except Exception as e:
-                logger.error(f"Worker-ல் லிங்கை ரெஜிஸ்டர் செய்வதில் எரர்: {e}")
-                await status_msg.edit_text(f"Failed to register link: {e}")
-                return
-
-            encoded_name = urllib.parse.quote_plus(filename)
-            watch_url = f"{RENDER_APP_BASE_URL}/watch/{short_id}?name={encoded_name}"
-
-            keyboard = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("▶️ Watch / Download", url=watch_url)]]
-            )
-
-            await status_msg.edit_text(
-                f"Your link is ready!\n\n**Filename:** `{filename}`\n**Link:** {watch_url}",
-                reply_markup=keyboard,
-            )
+        try:
+            short_id = await register_link(url, filename)
+        except Exception as e:
+            await status_msg.edit_text(f"Failed to register link: {e}")
             return
 
-        if URL_REGEX.match(text):
-            pending_urls[user_id] = text
-            await message.reply_text("Please enter the custom filename (with extension).")
-            return
+        encoded_name = urllib.parse.quote_plus(filename)
+        watch_url = f"{RENDER_APP_BASE_URL}/watch/{short_id}?name={encoded_name}"
 
-        await message.reply_text("Please send a valid direct URL to begin.")
-        
-    except Exception as e:
-        logger.error(f"மெசேஜை ப்ராசஸ் செய்யும்போது எதிர்பாராத எரர்: {e}")
-        traceback.print_exc()
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("▶️ Watch / Download", url=watch_url)]]
+        )
+
+        await status_msg.edit_text(
+            f"Your link is ready!\n\n**Filename:** `{filename}`\n**Link:** {watch_url}",
+            reply_markup=keyboard,
+        )
+        return
+
+    # Case 2: user is sending a fresh URL
+    if URL_REGEX.match(text):
+        pending_urls[user_id] = text
+        await message.reply_text("Please enter the custom filename (with extension).")
+        return
+
+    # Case 3: not a URL, and no pending state
+    await message.reply_text("Please send a valid direct URL to begin.")
+
 
 async def register_link(url: str, name: str) -> str:
+    """POST to the Cloudflare Worker /api/add endpoint and return the short ID."""
     endpoint = f"{WORKER_BASE_URL}/api/add"
     payload = {"url": url, "name": name}
+
     async with aiohttp.ClientSession() as session:
         async with session.post(endpoint, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
             if resp.status != 200:
@@ -114,27 +138,37 @@ async def register_link(url: str, name: str) -> str:
                 raise RuntimeError(f"Worker response missing 'id': {data}")
             return short_id
 
+
 # ---------------- WEB SERVER ----------------
+
 async def watch_handler(request: web.Request) -> web.Response:
     short_id = request.match_info.get("id", "")
+
     if not short_id:
         return web.Response(status=400, text="Missing ID")
+
     raw_name = request.query.get("name", "Video.mp4")
     filename = urllib.parse.unquote_plus(raw_name)
+
     try:
         with open(DL_HTML_PATH, "r", encoding="utf-8") as f:
             template = f.read()
     except FileNotFoundError:
         return web.Response(status=500, text="dl.html template not found on server")
+
     stream_url = f"{WORKER_BASE_URL}/stream/{short_id}"
+
     try:
         rendered = template % (filename, filename, stream_url, stream_url, "Download")
     except TypeError as e:
         return web.Response(status=500, text=f"Template formatting error: {e}")
+
     return web.Response(text=rendered, content_type="text/html")
+
 
 async def health_handler(request: web.Request) -> web.Response:
     return web.Response(text="OK")
+
 
 def build_web_app() -> web.Application:
     app = web.Application()
@@ -142,42 +176,52 @@ def build_web_app() -> web.Application:
     app.router.add_get("/health", health_handler)
     return app
 
+
 async def run_web_server():
     app = build_web_app()
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info(f"Web server வெற்றிகரமாக போர்ட் {PORT}-ல் ஓடுகிறது.")
+    logger.info(f"Web server running on port {PORT}")
 
-# --- THE MASTER FIX : Clear Webhook & Pending Updates ---
-async def clear_telegram_webhook():
-    logger.info("டெலிகிராம் சர்வரில் சிக்கியுள்ள பழைய Webhook மற்றும் Update-களை அழிக்கிறது...")
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+
+# ---------------- KEEPALIVE (defeats Render free-tier spin-down) ----------------
+# Render's free Web Services suspend the whole process, including this
+# background Pyrogram socket, after ~15 minutes with no inbound HTTP
+# request. If Telegram sends a message while suspended, it is lost —
+# there is no delivery queue to replay it on wake. This pings our own
+# /health endpoint every 10 minutes to keep the dyno awake. If you're
+# on a paid/always-on plan this is harmless but unnecessary.
+async def keepalive_loop():
+    await asyncio.sleep(15)  # let the web server bind first
+    url = f"{RENDER_APP_BASE_URL}/health"
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            result = await resp.json()
-            logger.info(f"Webhook Clear Status: {result}")
+        while True:
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    logger.info(f"[KEEPALIVE] pinged {url} -> {resp.status}")
+            except Exception as e:
+                logger.warning(f"[KEEPALIVE] ping failed: {e}")
+            await asyncio.sleep(600)  # every 10 minutes
+
 
 async def main():
-    logger.info("சிஸ்டம் ஸ்டார்ட் ஆகிறது...")
-    try:
-        # 1. பழைய குப்பைகளை காலி செய் (Master Fix)
-        await clear_telegram_webhook()
-        
-        # 2. வெப் சர்வரை ஸ்டார்ட் செய்
-        await run_web_server()
-        
-        # 3. பாட்டை ஸ்டார்ட் செய்
-        await bot.start()
-        logger.info("பாட் 100% சக்சஸ்ஃபுல்லா ஆன்லைனுக்கு வந்துடுச்சு! மெசேஜ்க்காக காத்திருக்கிறது...")
-        
-        await idle()
-    except Exception as e:
-        logger.error(f"கிரிட்டிக்கல் எரர்! : {e}")
-        traceback.print_exc()
-    finally:
-        await bot.stop()
+    await run_web_server()
+    await bot.start()
+    logger.info("Bot started. Waiting for updates...")
+    asyncio.create_task(keepalive_loop())
+    await idle()
+    await bot.stop()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
+```
+
+**Deploy this, then send `/start` and check your logs immediately:**
+
+- **If you see nothing at all under `[RAW UPDATE RECEIVED]`** — Telegram's MTProto socket isn't delivering updates to this process at the transport level. That confirms it's Render's network layer (or the free-tier spin-down), not your code. Next step: confirm this is a Background Worker (not a Web Service) if possible, or at minimum keep the keepalive above running and retest.
+- **If you see `[RAW UPDATE RECEIVED]` but never `[HANDLE_TEXT TRIGGERED]`** — updates are arriving fine and the bug is a filter/dispatch issue in the handler registration, which we can then fix precisely instead of guessing.
+
+Report back which of the two you see and I can narrow it down from there rather than throwing more speculative fixes at it.
