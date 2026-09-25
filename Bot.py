@@ -12,16 +12,14 @@ from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- SPY MODE: LOGGING SETUP ---
-# உள்ளே நடக்கும் ஒவ்வொரு அசைவையும் Render லாக்கில் பிரிண்ட் செய்ய
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - [SPY] - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-# -------------------------------
 
 # ---------------- CONFIG ----------------
-API_ID = 9649038  # உங்கள் உண்மையான நம்பரை கொடுக்கவும்
+API_ID = 9649038  # உங்கள் உண்மையான நம்பரை கொடுக்கவும் (Quotes வேண்டாம்)
 API_HASH = "a5e111e536a6f95aec711676e43a0666"
 BOT_TOKEN = "8296387630:AAHhzp_M0VahMZusJ8WswfBRPVAy8UJ8N-E"
 
@@ -34,12 +32,13 @@ URL_REGEX = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 pending_urls = {}
 
+# in_memory=True என்பது Render-ல் File Lock எரர் வராமல் தடுக்கும்
 bot = Client(
     "bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    in_memory=True  # <--- இந்த ஒரு வரியை மட்டும் புதுசா கமா (,) போட்டு சேருங்க!
+    in_memory=True
 )
 
 def gen_short_id(length: int = 8) -> str:
@@ -51,10 +50,14 @@ async def handle_text(client: Client, message: Message):
     text = message.text.strip()
     user_id = message.from_user.id
     
-    # ஸ்பை சென்சார் 1: மெசேஜ் உள்ளே வருகிறதா?
     logger.info(f"புதிய மெசேஜ் வந்தது! User ID: {user_id} | Text: {text}")
 
     try:
+        # /start கமாண்டுக்கு மட்டும் பிரத்யேக ரிப்ளை
+        if text.startswith("/start"):
+            await message.reply_text("நான் உயிரோடு இருக்கிறேன் மச்சான்! 🚀\n\nதயவுசெய்து ஒரு Direct Video URL-ஐ அனுப்பவும்.")
+            return
+
         if user_id in pending_urls:
             url = pending_urls.pop(user_id)
             filename = text.strip()
@@ -94,15 +97,12 @@ async def handle_text(client: Client, message: Message):
         await message.reply_text("Please send a valid direct URL to begin.")
         
     except Exception as e:
-        # ஸ்பை சென்சார் 2: மெசேஜ் ப்ராசஸ் ஆகும்போது ஏதாவது எரர் வருகிறதா?
         logger.error(f"மெசேஜை ப்ராசஸ் செய்யும்போது எதிர்பாராத எரர்: {e}")
         traceback.print_exc()
-
 
 async def register_link(url: str, name: str) -> str:
     endpoint = f"{WORKER_BASE_URL}/api/add"
     payload = {"url": url, "name": name}
-
     async with aiohttp.ClientSession() as session:
         async with session.post(endpoint, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
             if resp.status != 200:
@@ -119,23 +119,18 @@ async def watch_handler(request: web.Request) -> web.Response:
     short_id = request.match_info.get("id", "")
     if not short_id:
         return web.Response(status=400, text="Missing ID")
-
     raw_name = request.query.get("name", "Video.mp4")
     filename = urllib.parse.unquote_plus(raw_name)
-
     try:
         with open(DL_HTML_PATH, "r", encoding="utf-8") as f:
             template = f.read()
     except FileNotFoundError:
         return web.Response(status=500, text="dl.html template not found on server")
-
     stream_url = f"{WORKER_BASE_URL}/stream/{short_id}"
-
     try:
         rendered = template % (filename, filename, stream_url, stream_url, "Download")
     except TypeError as e:
         return web.Response(status=500, text=f"Template formatting error: {e}")
-
     return web.Response(text=rendered, content_type="text/html")
 
 async def health_handler(request: web.Request) -> web.Response:
@@ -155,27 +150,34 @@ async def run_web_server():
     await site.start()
     logger.info(f"Web server வெற்றிகரமாக போர்ட் {PORT}-ல் ஓடுகிறது.")
 
+# --- THE MASTER FIX : Clear Webhook & Pending Updates ---
+async def clear_telegram_webhook():
+    logger.info("டெலிகிராம் சர்வரில் சிக்கியுள்ள பழைய Webhook மற்றும் Update-களை அழிக்கிறது...")
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            result = await resp.json()
+            logger.info(f"Webhook Clear Status: {result}")
+
 async def main():
     logger.info("சிஸ்டம் ஸ்டார்ட் ஆகிறது...")
     try:
-        # 1. வெப் சர்வரை ஸ்டார்ட் செய்
+        # 1. பழைய குப்பைகளை காலி செய் (Master Fix)
+        await clear_telegram_webhook()
+        
+        # 2. வெப் சர்வரை ஸ்டார்ட் செய்
         await run_web_server()
         
-        # 2. பாட்டை ஸ்டார்ட் செய்
-        logger.info("பாட்டை டெலிகிராம் சர்வருடன் இணைக்க முயற்சிக்கிறது...")
+        # 3. பாட்டை ஸ்டார்ட் செய்
         await bot.start()
         logger.info("பாட் 100% சக்சஸ்ஃபுல்லா ஆன்லைனுக்கு வந்துடுச்சு! மெசேஜ்க்காக காத்திருக்கிறது...")
         
-        # 3. பாட் ஆஃப் ஆகாமல் விழித்திருக்க
         await idle()
-        
     except Exception as e:
-        # ஸ்பை சென்சார் 3: சர்வர் ஸ்டார்ட் ஆகும்போது எரர் வந்தால் காட்ட
-        logger.error(f"கிரிட்டிக்கல் எரர்! சிஸ்டம் ஸ்டார்ட் ஆகவில்லை: {e}")
+        logger.error(f"கிரிட்டிக்கல் எரர்! : {e}")
         traceback.print_exc()
     finally:
         await bot.stop()
-        logger.info("சிஸ்டம் நிறுத்தப்பட்டது.")
 
 if __name__ == "__main__":
     asyncio.run(main())
