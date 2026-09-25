@@ -1,11 +1,3 @@
-The two things you've verified rule out credentials and webhook conflicts, but they don't rule out the two most common real-world causes of exactly this symptom on Render:
-
-1. **Render free-tier spin-down**: if this is a free Web Service, Render suspends the entire process (including your persistent Pyrogram socket) after ~15 minutes of no *inbound HTTP* traffic. Telegram messages arriving while it's asleep are simply lost — MTProto has no delivery queue like webhooks do, so there's nothing to replay when it wakes up. A self-ping keepalive fixes this without needing a paid plan.
-2. **You can't tell from `on_message` alone whether Pyrogram is receiving anything at the transport layer.** If a raw update never arrives, that's Render/network. If raw updates arrive but `on_message` never fires, that's a filter problem. Right now you have no way to distinguish these — so I've added a raw update logger, which is the actual diagnostic you're missing.
-
-I also added explicit `workers=`, `sleep_threshold=`, and swapped your `asyncio.Event().wait()` for Pyrogram's own `idle()`, which handles shutdown/reconnect signaling correctly (yours technically shouldn't cause deafness, but it's not the tool designed for this and I want to eliminate every variable).
-
-```python
 import os
 import re
 import string
