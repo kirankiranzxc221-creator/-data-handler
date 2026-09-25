@@ -10,9 +10,9 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ---------------- CONFIG ----------------
-API_ID = int(os.environ.get("API_ID", "0"))
-API_HASH = os.environ.get("API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+API_ID = 9649038
+API_HASH = "a5e111e536a6f95aec711676e43a0666"
+BOT_TOKEN = "8296387630:AAHWE_36tjdgjWVTS0gXQD5S-xanIZzJl1g"
 
 WORKER_BASE_URL = os.environ.get("WORKER_BASE_URL", "https://my-worker.dev")
 RENDER_APP_BASE_URL = os.environ.get("RENDER_APP_BASE_URL", "https://my-render-app.onrender.com")
