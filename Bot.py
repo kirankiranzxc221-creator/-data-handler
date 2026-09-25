@@ -9,7 +9,6 @@ import aiohttp
 from aiohttp import web
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.raw.base import Update
 
 # ---------------- LOGGING ----------------
 logging.basicConfig(
@@ -50,12 +49,37 @@ def gen_short_id(length: int = 8) -> str:
     return "".join(random.choice(chars) for _ in range(length))
 
 
+# ---------------- WEBHOOK CHECK / CLEAR ----------------
+# Pyrogram itself never uses webhooks - it holds a live MTProto socket.
+# BUT if a webhook was ever registered for this bot token via the Bot
+# API (setWebhook), Telegram will route updates there instead of down
+# the MTProto socket, which looks exactly like "updates never arrive"
+# in Pyrogram. This checks and clears it on every startup.
+async def clear_webhook():
+    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(f"{api_url}/getWebhookInfo", timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                info = await resp.json()
+                logger.info(f"[WEBHOOK CHECK] Current webhook info: {info}")
+        except Exception as e:
+            logger.warning(f"[WEBHOOK CHECK] Failed to fetch webhook info: {e}")
+
+        try:
+            async with session.get(
+                f"{api_url}/deleteWebhook",
+                params={"drop_pending_updates": "true"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                result = await resp.json()
+                logger.info(f"[WEBHOOK CLEAR] deleteWebhook result: {result}")
+        except Exception as e:
+            logger.warning(f"[WEBHOOK CLEAR] Failed to delete webhook: {e}")
+
+
 # ---------------- DIAGNOSTIC: RAW UPDATE LOGGER ----------------
-# This fires on EVERY update Pyrogram receives at the transport layer,
-# before any filters are applied. If this never logs anything when you
-# send /start, the problem is network/transport (Render), not your
-# handler filters. If it DOES log but handle_text below never fires,
-# the problem is in your filters.
+# Fires on every update Pyrogram receives at the transport layer,
+# before filters apply. Keep this in until you confirm updates flow.
 @bot.on_raw_update()
 async def raw_update_logger(client: Client, update, users, chats):
     logger.info(f"[RAW UPDATE RECEIVED] type={type(update).__name__} raw={update}")
@@ -179,14 +203,8 @@ async def run_web_server():
 
 
 # ---------------- KEEPALIVE (defeats Render free-tier spin-down) ----------------
-# Render's free Web Services suspend the whole process, including this
-# background Pyrogram socket, after ~15 minutes with no inbound HTTP
-# request. If Telegram sends a message while suspended, it is lost —
-# there is no delivery queue to replay it on wake. This pings our own
-# /health endpoint every 10 minutes to keep the dyno awake. If you're
-# on a paid/always-on plan this is harmless but unnecessary.
 async def keepalive_loop():
-    await asyncio.sleep(15)  # let the web server bind first
+    await asyncio.sleep(15)
     url = f"{RENDER_APP_BASE_URL}/health"
     async with aiohttp.ClientSession() as session:
         while True:
@@ -195,11 +213,12 @@ async def keepalive_loop():
                     logger.info(f"[KEEPALIVE] pinged {url} -> {resp.status}")
             except Exception as e:
                 logger.warning(f"[KEEPALIVE] ping failed: {e}")
-            await asyncio.sleep(600)  # every 10 minutes
+            await asyncio.sleep(600)
 
 
 async def main():
     await run_web_server()
+    await clear_webhook()
     await bot.start()
     logger.info("Bot started. Waiting for updates...")
     asyncio.create_task(keepalive_loop())
