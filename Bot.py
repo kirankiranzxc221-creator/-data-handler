@@ -39,6 +39,7 @@ bot = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
+    in_memory=True  # <--- இந்த ஒரு வரியை மட்டும் புதுசா கமா (,) போட்டு சேருங்க!
 )
 
 def gen_short_id(length: int = 8) -> str:
