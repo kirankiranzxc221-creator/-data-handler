@@ -120,7 +120,7 @@ async def set_webhook():
             "allowed_updates": ["message", "channel_post"],
         },
     )
-    logger.info(f"[SET WEBHOOK] url={webhook_url} result={result}")
+    logger.info(f"[SET WEBHOOK] result={result}")
 
     info = await tg_call("getWebhookInfo", {})
     logger.info(f"[WEBHOOK INFO] {info}")
@@ -177,13 +177,19 @@ def has_media(message: dict) -> bool:
 async def handle_filetolink_message(message: dict):
     """
     Processes a message/caption that contains one or more /watch/<id> links:
-      - builds a fresh watch URL using the media's real file name (or a
+      - builds a fresh watch URL rooted at the *extracted worker domain*
+        (never RENDER_APP_BASE_URL) using the media's real file name (or a
         fallback for plain text),
       - shortens it via shrinkme.io,
       - swaps only the matched substring for the shortened URL, leaving the
         rest of the text untouched,
       - reposts the payload (copying media, or sending plain text) with an
         inline "Watch online & Download" button.
+
+    RENDER_APP_BASE_URL is intentionally never referenced anywhere in this
+    function, its logging, or anything passed to shrink_url — the only host
+    that ever appears in a user-facing or shortened link here is the domain
+    pulled straight out of the incoming /watch/<id> link itself.
     """
     chat = message.get("chat", {})
     chat_id = chat.get("id")
@@ -207,8 +213,11 @@ async def handle_filetolink_message(message: dict):
     encoded_name = urllib.parse.quote_plus(file_name)
     encoded_domain = urllib.parse.quote_plus(extracted_domain)
 
+    # Rooted at the dynamic worker domain pulled from the original link, not
+    # RENDER_APP_BASE_URL, so the Render host is never surfaced to users,
+    # logs, or the shrinkme.io shortener.
     base_url = (
-        f"{RENDER_APP_BASE_URL}/watch/{short_id}"
+        f"https://{extracted_domain}/watch/{short_id}"
         f"?name={encoded_name}&domain={encoded_domain}"
     )
 
@@ -414,7 +423,7 @@ async def keepalive_loop():
     while True:
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                logger.info(f"[KEEPALIVE] pinged {url} -> {resp.status}")
+                logger.info(f"[KEEPALIVE] ping -> {resp.status}")
         except Exception as e:
             logger.warning(f"[KEEPALIVE] ping failed: {e}")
         await asyncio.sleep(600)
