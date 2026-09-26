@@ -200,12 +200,17 @@ async def handle_filetolink_message(message: dict):
         return
 
     matched_url = match.group(0)
+    extracted_domain = match.group(1)
     short_id = match.group(2)
 
     file_name = extract_media_file_name(message) or DEFAULT_FALLBACK_FILENAME
     encoded_name = urllib.parse.quote_plus(file_name)
+    encoded_domain = urllib.parse.quote_plus(extracted_domain)
 
-    base_url = f"{RENDER_APP_BASE_URL}/watch/{short_id}?name={encoded_name}"
+    base_url = (
+        f"{RENDER_APP_BASE_URL}/watch/{short_id}"
+        f"?name={encoded_name}&domain={encoded_domain}"
+    )
 
     shortened_url = await shrink_url(base_url)
 
@@ -360,8 +365,14 @@ async def watch_handler(request: web.Request) -> web.Response:
     except FileNotFoundError:
         return web.Response(status=500, text="dl.html template not found on server")
 
-    # Payload delivery now goes through /dl/ instead of /stream/.
-    stream_url = f"{WORKER_BASE_URL}/dl/{short_id}"
+    # Payload delivery now goes through /dl/ instead of /stream/, routed to
+    # whichever worker domain the original link came from (falls back to
+    # WORKER_BASE_URL when no domain was passed through).
+    target_domain = request.query.get("domain")
+    if target_domain:
+        stream_url = f"https://{target_domain}/dl/{short_id}"
+    else:
+        stream_url = f"{WORKER_BASE_URL}/dl/{short_id}"
     download_url = stream_url
 
     try:
