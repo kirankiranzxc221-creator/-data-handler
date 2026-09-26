@@ -219,9 +219,10 @@ async def watch_handler(request: web.Request) -> web.Response:
         return web.Response(status=500, text="dl.html template not found on server")
 
     stream_url = f"{WORKER_BASE_URL}/stream/{short_id}"
+    download_url = f"{stream_url}?dl=1"
 
     try:
-        rendered = template % (filename, filename, stream_url, stream_url, "Download")
+        rendered = template % (filename, filename, stream_url, download_url, "Download")
     except TypeError as e:
         return web.Response(status=500, text=f"Template formatting error: {e}")
 
