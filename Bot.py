@@ -23,14 +23,9 @@ WORKER_BASE_URL = os.environ.get("WORKER_BASE_URL", "https://my-worker.dev")
 RENDER_APP_BASE_URL = os.environ.get("RENDER_APP_BASE_URL", "https://my-render-app.onrender.com")
 PORT = int(os.environ.get("PORT", "8080"))
 
-# shrinkme.io shortener config
-SHRINKME_API_KEY = os.environ.get("SHRINKME_API_KEY", "YOUR_API_KEY")
-SHRINKME_API_BASE = "https://shrinkme.io/api"
-
-# Base domain used to build the canonical /watch/ link that gets shortened
-FILETOLINK_BASE_DOMAIN = os.environ.get(
-    "FILETOLINK_BASE_DOMAIN", "https://link-to-link-59bm.onrender.com"
-)
+# shrinkme.io URL shortener API key
+SHRINKME_API_KEY = os.environ.get("SHRINKME_API_KEY", "")
+SHRINKME_API_URL = "https://shrinkme.io/api"
 
 # Secret used both to build an unguessable webhook path AND as Telegram's
 # secret_token header, so random POSTs to /webhook/* can't spoof updates.
@@ -43,8 +38,11 @@ DL_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dl.html
 
 URL_REGEX = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
-# Dynamic-domain matcher for existing /watch/<id> links, wherever they're hosted.
+# Matches any /watch/<id> link regardless of domain.
+# Group 1 = domain, Group 2 = short id.
 FILETOLINK_URL_REGEX = re.compile(r"https?://([a-zA-Z0-9.-]+)/watch/([A-Za-z0-9_-]+)")
+
+DEFAULT_FALLBACK_FILENAME = "Video.mkv"
 
 # In-memory state: user_id -> pending URL waiting for a filename
 pending_urls = {}
@@ -97,6 +95,8 @@ async def copy_message(
         "message_id": message_id,
         "parse_mode": "Markdown",
     }
+    # Omitting "caption" tells Telegram to keep the original caption, so we
+    # only include it when we actually have a (possibly rewritten) one.
     if caption is not None:
         payload["caption"] = caption
     if reply_markup:
@@ -117,7 +117,7 @@ async def set_webhook():
             "url": webhook_url,
             "secret_token": WEBHOOK_SECRET,
             "drop_pending_updates": True,
-            "allowed_updates": ["message"],
+            "allowed_updates": ["message", "channel_post"],
         },
     )
     logger.info(f"[SET WEBHOOK] url={webhook_url} result={result}")
@@ -126,24 +126,28 @@ async def set_webhook():
     logger.info(f"[WEBHOOK INFO] {info}")
 
 
-# ---------------- SHRINKME INTEGRATION ----------------
+# ---------------- URL SHORTENING ----------------
 
 async def shrink_url(long_url: str) -> str:
-    """Call shrinkme.io to shorten long_url. Falls back to long_url on failure."""
-    params = {"api": SHRINKME_API_KEY, "url": long_url}
-    endpoint = f"{SHRINKME_API_BASE}?{urllib.parse.urlencode(params)}"
+    """Call shrinkme.io and return the shortened URL, or the original URL on failure."""
+    if not SHRINKME_API_KEY:
+        logger.warning("[SHRINKME] No API key configured, skipping shortening")
+        return long_url
 
+    params = {"api": SHRINKME_API_KEY, "url": long_url}
     session = await get_session()
     try:
-        async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(
+            SHRINKME_API_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
             data = await resp.json(content_type=None)
     except Exception as e:
-        logger.warning(f"[SHRINKME] request failed: {e}")
+        logger.warning(f"[SHRINKME] Request failed: {e}")
         return long_url
 
     shortened = data.get("shortenedUrl")
     if not shortened:
-        logger.warning(f"[SHRINKME] unexpected response: {data}")
+        logger.warning(f"[SHRINKME] Unexpected response: {data}")
         return long_url
 
     return shortened
@@ -151,8 +155,20 @@ async def shrink_url(long_url: str) -> str:
 
 # ---------------- FILE-TO-LINK MESSAGE HANDLING ----------------
 
-def _get_media_message_id(message: dict):
-    """Returns True if the message carries document/video/photo media."""
+def extract_media_file_name(message: dict) -> str | None:
+    """Pull the original file name straight from the media's own metadata."""
+    document = message.get("document")
+    if document and document.get("file_name"):
+        return document["file_name"]
+
+    video = message.get("video")
+    if video and video.get("file_name"):
+        return video["file_name"]
+
+    return None
+
+
+def has_media(message: dict) -> bool:
     return bool(
         message.get("document") or message.get("video") or message.get("photo")
     )
@@ -160,52 +176,57 @@ def _get_media_message_id(message: dict):
 
 async def handle_filetolink_message(message: dict):
     """
-    Detects an existing dynamic-domain /watch/<id> link inside a message's
-    text or caption, rebuilds the canonical link, shortens it via shrinkme,
-    swaps only that URL substring in place, attaches a "Watch online &
-    Download" button pointing at the unshortened canonical link, and
-    re-delivers the message (copying media as-is, or sending plain text).
+    Processes a message/caption that contains one or more /watch/<id> links:
+      - builds a fresh watch URL using the media's real file name (or a
+        fallback for plain text),
+      - shortens it via shrinkme.io,
+      - swaps only the matched substring for the shortened URL, leaving the
+        rest of the text untouched,
+      - reposts the payload (copying media, or sending plain text) with an
+        inline "Watch online & Download" button.
     """
     chat = message.get("chat", {})
     chat_id = chat.get("id")
-    if chat_id is None:
-        return False
+    message_id = message.get("message_id")
+    if chat_id is None or message_id is None:
+        return
 
-    raw_text = message.get("text") or message.get("caption") or ""
-    match = FILETOLINK_URL_REGEX.search(raw_text)
+    is_media = has_media(message)
+    original_text = message.get("caption") if is_media else message.get("text")
+    original_text = original_text or ""
+
+    match = FILETOLINK_URL_REGEX.search(original_text)
     if not match:
-        return False
+        return
 
+    matched_url = match.group(0)
     short_id = match.group(2)
 
-    # Canonical /watch/ link the shortener wraps.
-    base_url = f"{FILETOLINK_BASE_DOMAIN}/watch/{short_id}?name=Video"
+    file_name = extract_media_file_name(message) or DEFAULT_FALLBACK_FILENAME
+    encoded_name = urllib.parse.quote_plus(file_name)
+
+    base_url = f"{RENDER_APP_BASE_URL}/watch/{short_id}?name={encoded_name}"
+
     shortened_url = await shrink_url(base_url)
 
-    # Replace ONLY the matched substring; everything else (spacing, emojis,
-    # surrounding text) stays untouched.
-    new_text = raw_text[: match.start()] + shortened_url + raw_text[match.end():]
+    # Replace only the matched URL substring; everything else (spacing,
+    # emojis, other text) stays exactly as it was.
+    new_text = original_text.replace(matched_url, shortened_url)
 
     reply_markup = {
-        "inline_keyboard": [
-            [{"text": "Watch online & Download", "url": base_url}]
-        ]
+        "inline_keyboard": [[{"text": "Watch online & Download", "url": base_url}]]
     }
 
-    if _get_media_message_id(message):
-        from_chat_id = chat_id
-        message_id = message.get("message_id")
+    if is_media:
         await copy_message(
             chat_id=chat_id,
-            from_chat_id=from_chat_id,
+            from_chat_id=chat_id,
             message_id=message_id,
             caption=new_text,
             reply_markup=reply_markup,
         )
     else:
         await send_message(chat_id, new_text, reply_markup)
-
-    return True
 
 
 # ---------------- UPDATE HANDLING ----------------
@@ -215,24 +236,24 @@ async def handle_message(message: dict):
     chat_id = chat.get("id")
     from_user = message.get("from", {})
     user_id = from_user.get("id")
-    text = (message.get("text") or message.get("caption") or "").strip()
+    text = (message.get("text") or "").strip()
+    caption = (message.get("caption") or "").strip()
 
     if chat_id is None or user_id is None:
         return
 
     logger.info(f"[MESSAGE] user_id={user_id} text={text!r}")
 
+    # Route messages/captions that already contain a /watch/<id> link to the
+    # dedicated file-to-link handler, regardless of domain.
+    if FILETOLINK_URL_REGEX.search(text) or FILETOLINK_URL_REGEX.search(caption):
+        await handle_filetolink_message(message)
+        return
+
     if text.startswith("/start"):
         pending_urls.pop(user_id, None)
         await send_message(chat_id, "Send me a direct URL to begin.")
         return
-
-    # Any incoming message (text or media caption) that already contains an
-    # existing /watch/<id> link gets rewritten with a shortened link + button.
-    if FILETOLINK_URL_REGEX.search(text):
-        handled = await handle_filetolink_message(message)
-        if handled:
-            return
 
     # Case 1: user is replying with a filename for a previously sent URL
     if user_id in pending_urls:
@@ -313,7 +334,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
     logger.info(f"[UPDATE RECEIVED] {update.get('update_id')}")
 
-    message = update.get("message")
+    message = update.get("message") or update.get("channel_post")
     if message:
         try:
             await handle_message(message)
@@ -339,8 +360,7 @@ async def watch_handler(request: web.Request) -> web.Response:
     except FileNotFoundError:
         return web.Response(status=500, text="dl.html template not found on server")
 
-    # Payload now served from /dl/ instead of /stream/; download uses the
-    # same endpoint directly (no separate ?dl=1 variant needed).
+    # Payload delivery now goes through /dl/ instead of /stream/.
     stream_url = f"{WORKER_BASE_URL}/dl/{short_id}"
     download_url = stream_url
 
