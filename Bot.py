@@ -365,14 +365,13 @@ async def watch_handler(request: web.Request) -> web.Response:
     except FileNotFoundError:
         return web.Response(status=500, text="dl.html template not found on server")
 
-    # Payload delivery now goes through /dl/ instead of /stream/, routed to
-    # whichever worker domain the original link came from (falls back to
-    # WORKER_BASE_URL when no domain was passed through).
+    # Dynamic forwarded links (with a domain param) use /dl/; manually
+    # registered links still go through the primary worker's /stream/.
     target_domain = request.query.get("domain")
     if target_domain:
         stream_url = f"https://{target_domain}/dl/{short_id}"
     else:
-        stream_url = f"{WORKER_BASE_URL}/dl/{short_id}"
+        stream_url = f"{WORKER_BASE_URL}/stream/{short_id}"
     download_url = stream_url
 
     try:
