@@ -95,8 +95,6 @@ async def copy_message(
         "message_id": message_id,
         "parse_mode": "Markdown",
     }
-    # Omitting "caption" tells Telegram to keep the original caption, so we
-    # only include it when we actually have a (possibly rewritten) one.
     if caption is not None:
         payload["caption"] = caption
     if reply_markup:
@@ -129,7 +127,6 @@ async def set_webhook():
 # ---------------- URL SHORTENING ----------------
 
 async def shrink_url(long_url: str) -> str:
-    """Call shrinkme.io and return the shortened URL, or the original URL on failure."""
     if not SHRINKME_API_KEY:
         logger.warning("[SHRINKME] No API key configured, skipping shortening")
         return long_url
@@ -156,7 +153,6 @@ async def shrink_url(long_url: str) -> str:
 # ---------------- FILE-TO-LINK MESSAGE HANDLING ----------------
 
 def extract_media_file_name(message: dict) -> str | None:
-    """Pull the original file name straight from the media's own metadata."""
     document = message.get("document")
     if document and document.get("file_name"):
         return document["file_name"]
@@ -175,22 +171,6 @@ def has_media(message: dict) -> bool:
 
 
 async def handle_filetolink_message(message: dict):
-    """
-    Processes a message/caption that contains one or more /watch/<id> links:
-      - builds a fresh watch URL rooted at the *extracted worker domain*
-        (never RENDER_APP_BASE_URL) using the media's real file name (or a
-        fallback for plain text),
-      - shortens it via shrinkme.io,
-      - swaps only the matched substring for the shortened URL, leaving the
-        rest of the text untouched,
-      - reposts the payload (copying media, or sending plain text) with an
-        inline "Watch online & Download" button.
-
-    RENDER_APP_BASE_URL is intentionally never referenced anywhere in this
-    function, its logging, or anything passed to shrink_url — the only host
-    that ever appears in a user-facing or shortened link here is the domain
-    pulled straight out of the incoming /watch/<id> link itself.
-    """
     chat = message.get("chat", {})
     chat_id = chat.get("id")
     message_id = message.get("message_id")
@@ -213,9 +193,6 @@ async def handle_filetolink_message(message: dict):
     encoded_name = urllib.parse.quote_plus(file_name)
     encoded_domain = urllib.parse.quote_plus(extracted_domain)
 
-    # Rooted at the dynamic worker domain pulled from the original link, not
-    # RENDER_APP_BASE_URL, so the Render host is never surfaced to users,
-    # logs, or the shrinkme.io shortener.
     base_url = (
         f"https://{extracted_domain}/watch/{short_id}"
         f"?name={encoded_name}&domain={encoded_domain}"
@@ -223,8 +200,6 @@ async def handle_filetolink_message(message: dict):
 
     shortened_url = await shrink_url(base_url)
 
-    # Replace only the matched URL substring; everything else (spacing,
-    # emojis, other text) stays exactly as it was.
     new_text = original_text.replace(matched_url, shortened_url)
 
     reply_markup = {
@@ -258,8 +233,6 @@ async def handle_message(message: dict):
 
     logger.info(f"[MESSAGE] user_id={user_id} text={text!r}")
 
-    # Route messages/captions that already contain a /watch/<id> link to the
-    # dedicated file-to-link handler, regardless of domain.
     if FILETOLINK_URL_REGEX.search(text) or FILETOLINK_URL_REGEX.search(caption):
         await handle_filetolink_message(message)
         return
@@ -292,7 +265,8 @@ async def handle_message(message: dict):
             return
 
         encoded_name = urllib.parse.quote_plus(filename)
-        watch_url = f"{RENDER_APP_BASE_URL}/watch/{short_id}?name={encoded_name}"
+        # FIXED: Using WORKER_BASE_URL instead of RENDER_APP_BASE_URL
+        watch_url = f"{WORKER_BASE_URL}/watch/{short_id}?name={encoded_name}"
 
         reply_markup = {
             "inline_keyboard": [[{"text": "▶️ Watch / Download", "url": watch_url}]]
@@ -334,8 +308,6 @@ async def register_link(url: str, name: str) -> str:
 # ---------------- WEB SERVER ----------------
 
 async def webhook_handler(request: web.Request) -> web.Response:
-    # Verify the secret token Telegram sends back, so only real Telegram
-    # requests (matching what we set in setWebhook) are processed.
     incoming_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
     if incoming_secret != WEBHOOK_SECRET:
         logger.warning("[WEBHOOK] Rejected request with bad/missing secret token")
@@ -355,7 +327,6 @@ async def webhook_handler(request: web.Request) -> web.Response:
         except Exception as e:
             logger.exception(f"[HANDLE_MESSAGE ERROR] {e}")
 
-    # Always 200 quickly, or Telegram will retry/backoff this update.
     return web.Response(status=200, text="OK")
 
 
@@ -374,16 +345,11 @@ async def watch_handler(request: web.Request) -> web.Response:
     except FileNotFoundError:
         return web.Response(status=500, text="dl.html template not found on server")
 
-    # Dynamic forwarded links (with a domain param) use /dl/; manually
-    # registered links still go through the primary worker's /stream/.
     target_domain = request.query.get("domain")
     if target_domain:
-        # Dynamic forwarded links use /dl/ for both streaming and download.
         stream_url = f"https://{target_domain}/dl/{short_id}"
         download_url = stream_url
     else:
-        # Manual registered links use /stream/ for streaming, and ?dl=1 to
-        # force a download disposition instead of inline playback.
         stream_url = f"{WORKER_BASE_URL}/stream/{short_id}"
         download_url = f"{WORKER_BASE_URL}/stream/{short_id}?dl=1"
 
