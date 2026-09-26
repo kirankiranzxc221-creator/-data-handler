@@ -369,10 +369,14 @@ async def watch_handler(request: web.Request) -> web.Response:
     # registered links still go through the primary worker's /stream/.
     target_domain = request.query.get("domain")
     if target_domain:
+        # Dynamic forwarded links use /dl/ for both streaming and download.
         stream_url = f"https://{target_domain}/dl/{short_id}"
+        download_url = stream_url
     else:
+        # Manual registered links use /stream/ for streaming, and ?dl=1 to
+        # force a download disposition instead of inline playback.
         stream_url = f"{WORKER_BASE_URL}/stream/{short_id}"
-    download_url = stream_url
+        download_url = f"{WORKER_BASE_URL}/stream/{short_id}?dl=1"
 
     try:
         rendered = template % (filename, filename, stream_url, download_url, "Download")
