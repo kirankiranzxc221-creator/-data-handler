@@ -205,11 +205,13 @@ async def handle_filetolink_message(message: dict):
 
     file_name = extract_media_file_name(message) or DEFAULT_FALLBACK_FILENAME
     encoded_name = urllib.parse.quote_plus(file_name)
+    encoded_domain = urllib.parse.quote_plus(extracted_domain)
 
-    # The extracted domain's own Worker now proxies /watch/ (fetching the
-    # HTML from Render server-side and injecting the correct domain param
-    # itself), so the link we hand out points straight at that Worker.
-    base_url = f"https://{extracted_domain}/watch/{short_id}?name={encoded_name}"
+    # External domain Workers don't run the /watch/ HTML proxy themselves, so
+    # the link points at the central proxy worker (WORKER_BASE_URL), passing
+    # the external domain through explicitly so Render can build a /dl/ link
+    # back to it.
+    base_url = f"{WORKER_BASE_URL}/watch/{short_id}?name={encoded_name}&domain={encoded_domain}"
 
     shortened_url = await shrink_url(base_url)
 
@@ -371,9 +373,9 @@ async def watch_handler(request: web.Request) -> web.Response:
     # registered links still go through the primary worker's /stream/.
     target_domain = request.query.get("domain")
     if target_domain:
-        # Dynamic forwarded links use /dl/ for both streaming and download.
+        # Dynamic forwarded links: /dl/ for streaming, /dl/?dl=1 for download.
         stream_url = f"https://{target_domain}/dl/{short_id}"
-        download_url = stream_url
+        download_url = f"https://{target_domain}/dl/{short_id}?dl=1"
     else:
         # Manual registered links use /stream/ for streaming, and ?dl=1 to
         # force a download disposition instead of inline playback.
