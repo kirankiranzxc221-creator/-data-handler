@@ -120,8 +120,7 @@ async def set_webhook():
             "allowed_updates": ["message", "channel_post"],
         },
     )
-    # URL removed from logging to keep it secret
-    logger.info(f"[SET WEBHOOK] result={result}")
+    logger.info(f"[SET WEBHOOK] url={webhook_url} result={result}")
 
     info = await tg_call("getWebhookInfo", {})
     logger.info(f"[WEBHOOK INFO] {info}")
@@ -176,6 +175,16 @@ def has_media(message: dict) -> bool:
 
 
 async def handle_filetolink_message(message: dict):
+    """
+    Processes a message/caption that contains one or more /watch/<id> links:
+      - builds a fresh watch URL using the media's real file name (or a
+        fallback for plain text),
+      - shortens it via shrinkme.io,
+      - swaps only the matched substring for the shortened URL, leaving the
+        rest of the text untouched,
+      - reposts the payload (copying media, or sending plain text) with an
+        inline "Watch online & Download" button.
+    """
     chat = message.get("chat", {})
     chat_id = chat.get("id")
     message_id = message.get("message_id")
@@ -196,16 +205,16 @@ async def handle_filetolink_message(message: dict):
 
     file_name = extract_media_file_name(message) or DEFAULT_FALLBACK_FILENAME
     encoded_name = urllib.parse.quote_plus(file_name)
-    encoded_domain = urllib.parse.quote_plus(extracted_domain)
 
-    # FIXED: Uses dynamic extracted domain instead of Render URL
-    base_url = (
-        f"https://{extracted_domain}/watch/{short_id}"
-        f"?name={encoded_name}&domain={encoded_domain}"
-    )
+    # The extracted domain's own Worker now proxies /watch/ (fetching the
+    # HTML from Render server-side and injecting the correct domain param
+    # itself), so the link we hand out points straight at that Worker.
+    base_url = f"https://{extracted_domain}/watch/{short_id}?name={encoded_name}"
 
     shortened_url = await shrink_url(base_url)
 
+    # Replace only the matched URL substring; everything else (spacing,
+    # emojis, other text) stays exactly as it was.
     new_text = original_text.replace(matched_url, shortened_url)
 
     reply_markup = {
@@ -239,6 +248,8 @@ async def handle_message(message: dict):
 
     logger.info(f"[MESSAGE] user_id={user_id} text={text!r}")
 
+    # Route messages/captions that already contain a /watch/<id> link to the
+    # dedicated file-to-link handler, regardless of domain.
     if FILETOLINK_URL_REGEX.search(text) or FILETOLINK_URL_REGEX.search(caption):
         await handle_filetolink_message(message)
         return
@@ -271,7 +282,9 @@ async def handle_message(message: dict):
             return
 
         encoded_name = urllib.parse.quote_plus(filename)
-        # FIXED: Uses WORKER_BASE_URL instead of Render URL
+        # The Worker now proxies /watch/ (fetching dl.html from Render
+        # server-side), so the link handed to the user is the Worker's own
+        # domain — Render is never exposed to the browser.
         watch_url = f"{WORKER_BASE_URL}/watch/{short_id}?name={encoded_name}"
 
         reply_markup = {
@@ -314,6 +327,8 @@ async def register_link(url: str, name: str) -> str:
 # ---------------- WEB SERVER ----------------
 
 async def webhook_handler(request: web.Request) -> web.Response:
+    # Verify the secret token Telegram sends back, so only real Telegram
+    # requests (matching what we set in setWebhook) are processed.
     incoming_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
     if incoming_secret != WEBHOOK_SECRET:
         logger.warning("[WEBHOOK] Rejected request with bad/missing secret token")
@@ -333,6 +348,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
         except Exception as e:
             logger.exception(f"[HANDLE_MESSAGE ERROR] {e}")
 
+    # Always 200 quickly, or Telegram will retry/backoff this update.
     return web.Response(status=200, text="OK")
 
 
@@ -351,11 +367,16 @@ async def watch_handler(request: web.Request) -> web.Response:
     except FileNotFoundError:
         return web.Response(status=500, text="dl.html template not found on server")
 
+    # Dynamic forwarded links (with a domain param) use /dl/; manually
+    # registered links still go through the primary worker's /stream/.
     target_domain = request.query.get("domain")
     if target_domain:
+        # Dynamic forwarded links use /dl/ for both streaming and download.
         stream_url = f"https://{target_domain}/dl/{short_id}"
         download_url = stream_url
     else:
+        # Manual registered links use /stream/ for streaming, and ?dl=1 to
+        # force a download disposition instead of inline playback.
         stream_url = f"{WORKER_BASE_URL}/stream/{short_id}"
         download_url = f"{WORKER_BASE_URL}/stream/{short_id}?dl=1"
 
@@ -395,7 +416,7 @@ async def keepalive_loop():
     while True:
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                logger.info(f"[KEEPALIVE] ping -> {resp.status}")
+                logger.info(f"[KEEPALIVE] pinged {url} -> {resp.status}")
         except Exception as e:
             logger.warning(f"[KEEPALIVE] ping failed: {e}")
         await asyncio.sleep(600)
