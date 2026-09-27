@@ -1,5 +1,6 @@
 import os
 import re
+import html
 import string
 import random
 import asyncio
@@ -69,14 +70,14 @@ async def tg_call(method: str, payload: dict) -> dict:
 
 
 async def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = reply_markup
     return await tg_call("sendMessage", payload)
 
 
 async def edit_message(chat_id: int, message_id: int, text: str, reply_markup: dict | None = None):
-    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown"}
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = reply_markup
     return await tg_call("editMessageText", payload)
@@ -93,7 +94,7 @@ async def copy_message(
         "chat_id": chat_id,
         "from_chat_id": from_chat_id,
         "message_id": message_id,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
     }
     # Omitting "caption" tells Telegram to keep the original caption, so we
     # only include it when we actually have a (possibly rewritten) one.
@@ -215,9 +216,12 @@ async def handle_filetolink_message(message: dict):
 
     shortened_url = await shrink_url(base_url)
 
-    # Replace only the matched URL substring; everything else (spacing,
-    # emojis, other text) stays exactly as it was.
-    new_text = original_text.replace(matched_url, shortened_url)
+    # Escape the original text for HTML first (so stray < or & in captions
+    # don't break the parser), then replace only the matched URL substring
+    # — matched against its escaped form — with the shortened URL. Spacing,
+    # emojis, and everything else stays untouched.
+    safe_text = html.escape(original_text)
+    new_text = safe_text.replace(html.escape(matched_url), shortened_url)
 
     reply_markup = {
         "inline_keyboard": [[{"text": "Watch online & Download", "url": base_url}]]
@@ -293,7 +297,7 @@ async def handle_message(message: dict):
             "inline_keyboard": [[{"text": "▶️ Watch / Download", "url": watch_url}]]
         }
 
-        final_text = f"Your link is ready!\n\n**Filename:** `{filename}`\n**Link:** {watch_url}"
+        final_text = f"Your link is ready!\n\n<b>Filename:</b> {html.escape(filename)}\n<b>Link:</b> {watch_url}"
         if status_message_id:
             await edit_message(chat_id, status_message_id, final_text, reply_markup)
         else:
