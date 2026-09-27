@@ -95,6 +95,8 @@ async def copy_message(
         "message_id": message_id,
         "parse_mode": "Markdown",
     }
+    # Omitting "caption" tells Telegram to keep the original caption, so we
+    # only include it when we actually have a (possibly rewritten) one.
     if caption is not None:
         payload["caption"] = caption
     if reply_markup:
@@ -118,6 +120,7 @@ async def set_webhook():
             "allowed_updates": ["message", "channel_post"],
         },
     )
+    # URL removed from logging to keep it secret
     logger.info(f"[SET WEBHOOK] result={result}")
 
     info = await tg_call("getWebhookInfo", {})
@@ -127,6 +130,7 @@ async def set_webhook():
 # ---------------- URL SHORTENING ----------------
 
 async def shrink_url(long_url: str) -> str:
+    """Call shrinkme.io and return the shortened URL, or the original URL on failure."""
     if not SHRINKME_API_KEY:
         logger.warning("[SHRINKME] No API key configured, skipping shortening")
         return long_url
@@ -153,6 +157,7 @@ async def shrink_url(long_url: str) -> str:
 # ---------------- FILE-TO-LINK MESSAGE HANDLING ----------------
 
 def extract_media_file_name(message: dict) -> str | None:
+    """Pull the original file name straight from the media's own metadata."""
     document = message.get("document")
     if document and document.get("file_name"):
         return document["file_name"]
@@ -193,6 +198,7 @@ async def handle_filetolink_message(message: dict):
     encoded_name = urllib.parse.quote_plus(file_name)
     encoded_domain = urllib.parse.quote_plus(extracted_domain)
 
+    # FIXED: Uses dynamic extracted domain instead of Render URL
     base_url = (
         f"https://{extracted_domain}/watch/{short_id}"
         f"?name={encoded_name}&domain={encoded_domain}"
@@ -265,7 +271,7 @@ async def handle_message(message: dict):
             return
 
         encoded_name = urllib.parse.quote_plus(filename)
-        # FIXED: Using WORKER_BASE_URL instead of RENDER_APP_BASE_URL
+        # FIXED: Uses WORKER_BASE_URL instead of Render URL
         watch_url = f"{WORKER_BASE_URL}/watch/{short_id}?name={encoded_name}"
 
         reply_markup = {
