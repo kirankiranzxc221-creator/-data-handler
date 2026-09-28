@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>%s</title>
-    <link rel="stylesheet" href="https://cdn.plyr.io/3.6.12/plyr.css" />
     <style>
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
@@ -38,6 +37,7 @@
         }
 
         .player-placeholder {
+            position: relative;
             width: 90%%;
             max-width: 400px;
             aspect-ratio: 16 / 9;
@@ -47,12 +47,27 @@
             margin: 0 auto;
             background: #000;
         }
-        
-        .plyr { width: 100%%; height: 100%%; }
 
-        /* பழைய பிளேயரின் உள்ளே இருக்கும் டவுன்லோட் ஐகானை மட்டும் கண்களுக்குத் தெரியாமல் மறைக்கிறோம் */
-        [data-plyr="download"] {
-            display: none !important;
+        #cv { width: 100%%; height: 100%%; object-fit: contain; display: block; }
+
+        .ctl {
+            position: absolute;
+            left: 0; right: 0; bottom: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 10px;
+            background: linear-gradient(transparent, rgba(0,0,0,0.75));
+            color: #fff;
+            font-size: 12px;
+        }
+        #pp {
+            background: none;
+            border: 0;
+            color: #00ffff;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 2px 6px;
         }
 
         .choose-option {
@@ -133,16 +148,14 @@
 <body>
 
     <div class="header-box"></div>
-    
+
     <div class="movie-title">
         <marquee direction="left">%s</marquee>
     </div>
 
-    <!-- பழைய கோடிங் மாதிரியே controls செட் செய்யப்பட்டுள்ளது, ஆனால் ஐகான் css மூலம் மறைக்கப்பட்டுள்ளது -->
     <div class="player-placeholder">
-        <video id="main-video" class="player" playsinline controls>
-            <source src="%s" type="video/mp4" />
-        </video>
+        <canvas id="cv" width="640" height="360" data-src="%s"></canvas>
+        <div class="ctl"><button id="pp">&#9654;</button><span id="tm">0:00</span></div>
     </div>
 
     <div class="choose-option">
@@ -151,7 +164,6 @@
     </div>
 
     <div class="buttons-container">
-        <!-- href இப்போது ?dl=1 உடன் நேரடியாக attachment டவுன்லோடை தூண்டுகிறது -->
         <a id="link-dl" href="%s" download="%s"><img src="https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Download.webp" class="btn-img" alt="Download Video"></a>
         <a id="link-vlc" href="#"><img src="https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/VLC_Player.webp" class="btn-img" alt="PLAY IN VLC"></a>
         <a id="link-playit" href="#"><img src="https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/PlayIt_Player.webp" class="btn-img" alt="PLAY IN PLAYit"></a>
@@ -159,17 +171,10 @@
 
     <div class="footer-box"></div>
 
-    <script src="https://cdn.plyr.io/3.6.12/plyr.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const player = new Plyr('.player', {
-                controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen']
-            });
+            const videoSrc = new URL(document.getElementById('cv').dataset.src, location.href).href;
 
-            const videoElement = document.getElementById('main-video');
-            const videoSrc = videoElement.querySelector('source').src;
-
-            // பச்சை பட்டனை அழுத்தும்போது ?dl=1 உள்ள href-க்கு நேரடியாக செல்கிறோம், இது Worker-ல் attachment header-ஐ தூண்டும்
             document.getElementById('link-dl').addEventListener('click', function(e) {
                 e.preventDefault();
                 window.location.href = this.getAttribute('href');
@@ -180,8 +185,322 @@
 
             const playitUrl = videoSrc.replace(/^https?:\/\//, '');
             document.getElementById('link-playit').href = "intent://" + playitUrl + "#Intent;package=com.playit.videoplayer;type=video/*;scheme=https;end";
-
         });
+    </script>
+
+    <script>
+    /* ===== Zero-Storage HEVC player: MKV demux (Range stream) + WebCodecs, audio = master clock ===== */
+    // Self-host libav.js (an AAC-capable variant) with .wasm served as application/wasm and CSP allowing wasm-unsafe-eval.
+    const LIBAV_BASE = "/libav/";
+    const LIBAV_JS = "/libav/libav-aac.js";
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const cv = document.getElementById('cv'), g = cv.getContext('2d');
+        const pp = document.getElementById('pp'), tm = document.getElementById('tm');
+        const SRC = new URL(cv.dataset.src, location.href).href;
+        const actx = new (window.AudioContext || window.webkitAudioContext)();
+        actx.suspend();
+        const aT0 = actx.currentTime + 0.3;          // media time 0 == ctx time aT0 (pre-roll)
+        let aEnd = 0;                                // ctx time where scheduled audio ends (back-pressure)
+        let base = null;                             // set ONLY by the first audio packet (us), subtracted once
+        const vq = [];                               // decoded VideoFrames awaiting display
+        const vPend = [];                            // video chunks held until audio sets base
+
+        /* ---------- Matroska (EBML) streaming demuxer ---------- */
+        const MASTER = {0x18538067:1,0x1654AE6B:1,0xAE:1,0xE0:1,0xE1:1,0x1F43B675:1,0xA0:1,0x1549A966:1};
+        const LEAF = new Set([0xA3,0xA1,0xE7,0xD7,0x83,0x86,0x63A2,0xB0,0xBA,0xB5,0x9F,0x2AD7B1]);
+        let buf = new Uint8Array(0), skip = 0, scale = 1000000, ctc = 0;
+        let tks = [], cur = null, sel = false, V = null, A = null;
+
+        function rd(b, p, keep) {
+            if (p >= b.length) return null;
+            let len = 1, mask = 0x80;
+            while (len <= 8 && !(b[p] & mask)) { mask >>= 1; len++; }
+            if (len > 8 || p + len > b.length) return null;
+            let v = keep ? b[p] : (b[p] & (mask - 1));
+            for (let i = 1; i < len; i++) v = v * 256 + b[p + i];
+            return [v, len];
+        }
+
+        function push(chunk) {
+            if (skip) {
+                if (chunk.length <= skip) { skip -= chunk.length; return; }
+                chunk = chunk.subarray(skip); skip = 0;
+            }
+            const n = new Uint8Array(buf.length + chunk.length);
+            n.set(buf); n.set(chunk, buf.length); buf = n;
+            let p = 0;
+            for (;;) {
+                const a = rd(buf, p, true); if (!a) break;
+                const b = rd(buf, p + a[1], false); if (!b) break;
+                const id = a[0], hl = a[1] + b[1];
+                let sz = b[0];
+                if (sz === Math.pow(2, 7 * b[1]) - 1) sz = -1;
+                if (MASTER[id] || sz < 0) {
+                    if (id === 0xAE) { cur = {}; tks.push(cur); }
+                    p += hl; continue;
+                }
+                if (LEAF.has(id)) {
+                    if (p + hl + sz > buf.length) break;
+                    leaf(id, buf.subarray(p + hl, p + hl + sz));
+                    p += hl + sz;
+                } else {
+                    const av = buf.length - p - hl;
+                    if (av >= sz) { p += hl + sz; }
+                    else { skip = sz - av; p = buf.length; break; }
+                }
+            }
+            buf = buf.subarray(p);
+        }
+
+        function leaf(id, d) {
+            const u = () => { let v = 0; for (const x of d) v = v * 256 + x; return v; };
+            const dv = () => new DataView(d.buffer, d.byteOffset, d.byteLength);
+            switch (id) {
+                case 0x2AD7B1: scale = u(); break;
+                case 0xE7: ctc = u(); break;
+                case 0xD7: if (cur) cur.n = u(); break;
+                case 0x83: if (cur) cur.t = u(); break;
+                case 0x86: if (cur) cur.c = new TextDecoder().decode(d); break;
+                case 0x63A2: if (cur) cur.p = d.slice(); break;
+                case 0xB0: if (cur) cur.w = u(); break;
+                case 0xBA: if (cur) cur.h = u(); break;
+                case 0xB5: if (cur) cur.sr = d.length === 4 ? dv().getFloat32(0) : dv().getFloat64(0); break;
+                case 0x9F: if (cur) cur.ch = u(); break;
+                case 0xA3: case 0xA1: block(d, id); break;
+            }
+        }
+
+        let vStarted = false, vFail = false;
+
+        function feedV(data, ts, k) {
+            const key = k === null ? !vStarted : k;      // BlockGroup blocks: only the first is treated as key
+            if (!vdec && !vFail) initV();
+            if (!vdec) return;
+            if (!vStarted) { if (!key) return; vStarted = true; }
+            try { vdec.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: ts, data })); } catch (e) {}
+        }
+
+        function block(d, id) {
+            if (!sel) {
+                sel = true;
+                V = tks.find(t => t.t === 1);   // first video track
+                A = tks.find(t => t.t === 2);   // default/first audio track only
+            }
+            const r = rd(d, 0, false); if (!r) return;
+            const l = r[1], tn = r[0];
+            const rel = ((d[l] << 8) | d[l + 1]) << 16 >> 16;
+            const fl = d[l + 2];
+            if (fl & 6) return;                 // laced blocks not supported
+            const data = d.subarray(l + 3);
+            const ts = (ctc + rel) * scale / 1000;   // microseconds
+            if (A && tn === A.n) {
+                if (base === null) {             // FIX 4: base is set ONLY here, by the first audio packet
+                    base = ts;
+                    while (vPend.length) { const v = vPend.shift(); feedV(v.d, v.ts, v.k); }
+                }
+                aPending++;
+                achain = achain.then(() => onA({ data, ts })).catch(() => {}).then(() => { aPending--; });
+            } else if (V && tn === V.n) {
+                const k = id === 0xA3 ? !!(fl & 0x80) : null;
+                if (base === null) { if (vPend.length < 600) vPend.push({ d: data, ts, k }); return; }   // video waits for audio
+                feedV(data, ts, k);
+            }
+        }
+
+        /* ---------- Video (hardware WebCodecs, no capability check, silent freeze if unsupported) ---------- */
+        let vdec = null;
+
+        // FIX 1: validated hvcC -> RFC 6381 codec string; returns null if the record looks malformed
+        function hevcStr(h) {
+            try {
+                if (!h || h.length < 13 || h[0] !== 1) return null;   // configurationVersion must be 1
+                const sp = (h[1] >> 6) & 3, tier = (h[1] >> 5) & 1, pf = h[1] & 31;
+                let c = ((h[2] << 24) | (h[3] << 16) | (h[4] << 8) | h[5]) >>> 0, r = 0;
+                for (let i = 0; i < 32; i++) { r = ((r << 1) | (c & 1)) >>> 0; c >>>= 1; }   // reverse 32 compat bits
+                const k = Array.from(h.slice(6, 12));
+                while (k.length && k[k.length - 1] === 0) k.pop();                            // drop trailing zero bytes
+                return 'hvc1.' + ['', 'A', 'B', 'C'][sp] + pf + '.' + r.toString(16) + '.' + (tier ? 'H' : 'L') + h[12] +
+                    k.map(x => '.' + x.toString(16).toUpperCase()).join('');
+            } catch (e) { return null; }
+        }
+
+        function initV() {
+            vFail = true;                                   // stays true unless a configure() succeeds
+            try { cv.width = V.w; cv.height = V.h; } catch (e) {}
+            const gen = hevcStr(V.p);
+            console.log('[HEVC] generated codec string:', gen, '| hvcC bytes:', V.p ? V.p.length : 0);
+            const cands = [gen, 'hvc1', 'hev1'].filter((x, i, a) => x && a.indexOf(x) === i);
+            for (const codec of cands) {
+                try {
+                    const d = new VideoDecoder({ output: f => vq.push(f), error: e => console.log('[HEVC] decoder error:', e && e.message) });
+                    d.configure({ codec, codedWidth: V.w, codedHeight: V.h, description: V.p, hardwareAcceleration: 'prefer-hardware' });
+                    vdec = d; vFail = false;
+                    console.log('[HEVC] configured with:', codec);
+                    return;
+                } catch (e) { console.log('[HEVC] configure threw for', codec, e && e.message); }
+            }
+        }
+
+        /* ---------- Audio: native AudioDecoder (verified by real decode) -> libav.js WASM fallback ---------- */
+        const NC = { A_AAC: 'mp4a.40.2', A_OPUS: 'opus', A_FLAC: 'flac', A_VORBIS: 'vorbis', A_AC3: 'ac-3', A_EAC3: 'ec-3', 'A_MPEG/L3': 'mp3' };
+        const LAV = { A_AAC: 'aac', A_AC3: 'ac3', A_EAC3: 'eac3', A_DTS: 'dca', 'A_MPEG/L3': 'mp3' };
+        let achain = Promise.resolve(), aPending = 0, mode = null, pb = [], probing = false;
+        let nat = null, la = null, lc = null, lpkt = null, lfr = null;
+
+        // FIX 2: gapless scheduling. Buffers are laid back-to-back on a running cursor (aNext) instead of
+        // being placed at per-packet absolute times, so timestamp rounding can't create gaps/overlaps.
+        // Late buffers are trimmed (start offset) or dropped instead of being started "in the past".
+        let aNext = 0, aHave = false;
+        function playPCM(ch, sr, tsUs) {
+            if (base === null) return;
+            const L = ch[0].length, dur = L / sr, now = actx.currentTime;
+            const t = aT0 + (tsUs - base) / 1e6;
+            if (!aHave || Math.abs(t - aNext) > 0.05) { aNext = t; aHave = true; }   // resync only on a real gap/jump
+            const when = aNext;
+            aNext += dur; aEnd = aNext;
+            if (when + dur <= now) return;                                             // completely late: drop
+            const b = actx.createBuffer(ch.length, L, sr);
+            ch.forEach((x, i) => b.copyToChannel(x, i));
+            const s = actx.createBufferSource();
+            s.buffer = b; s.connect(actx.destination);
+            if (when < now) s.start(now, now - when);                                  // partially late: trim the start
+            else s.start(when);
+        }
+        function playAD(a) {
+            const ch = [];
+            for (let c = 0; c < a.numberOfChannels; c++) {
+                const x = new Float32Array(a.numberOfFrames);
+                a.copyTo(x, { planeIndex: c, format: 'f32-planar' });
+                ch.push(x);
+            }
+            const sr = a.sampleRate, ts = a.timestamp;
+            a.close();
+            playPCM(ch, sr, ts);
+        }
+        const chunkA = p => new EncodedAudioChunk({ type: 'key', timestamp: p.ts, data: p.data });
+
+        async function tryNative(pk) {
+            try {
+                const outs = [];
+                probing = true;
+                const d = new AudioDecoder({ output: a => (probing ? outs.push(a) : playAD(a)), error: () => {} });
+                d.configure({ codec: NC[A.c] || A.c, sampleRate: A.sr || 48000, numberOfChannels: A.ch || 2, description: A.p });
+                pk.forEach(p => d.decode(chunkA(p)));
+                await d.flush();
+                probing = false;
+                if (!outs.length) { d.close(); return false; }
+                nat = d;
+                outs.forEach(playAD);
+                return true;
+            } catch (e) { probing = false; return false; }
+        }
+
+        async function initWasm() {
+            window.LibAV = { base: LIBAV_BASE };
+            await new Promise((ok, no) => {
+                const s = document.createElement('script');
+                s.src = LIBAV_JS; s.onload = ok; s.onerror = no;
+                document.head.appendChild(s);
+            });
+            la = await LibAV.LibAV();
+            const r = await la.ff_init_decoder(LAV[A.c] || 'aac');
+            lc = r[1]; lpkt = r[2]; lfr = r[3];
+        }
+
+        function adts(data) {
+            const a = A.p, obj = a[0] >> 3, sfi = ((a[0] & 7) << 1) | (a[1] >> 7), ch = (a[1] >> 3) & 15;
+            const fl = data.length + 7, o = new Uint8Array(fl);
+            o[0] = 0xFF; o[1] = 0xF1;
+            o[2] = ((obj - 1) << 6) | (sfi << 2) | (ch >> 2);
+            o[3] = ((ch & 3) << 6) | (fl >> 11);
+            o[4] = (fl >> 3) & 0xFF;
+            o[5] = ((fl & 7) << 5) | 0x1F;
+            o[6] = 0xFC;
+            o.set(data, 7);
+            return o;
+        }
+        function silence(p) {
+            const n = A.ch || 2;
+            playPCM(Array.from({ length: n }, () => new Float32Array(1024)), A.sr || 48000, p.ts);
+        }
+        async function feedW(p) {
+            try {
+                const data = A.c === 'A_AAC' && A.p ? adts(p.data) : p.data;
+                // ff_decode_multi copies frames out and unrefs packet/frame internally (no leak); decoder objects are reused
+                const fr = await la.ff_decode_multi(lc, lpkt, lfr, [{ data, pts: 0, ptshi: 0 }], { ignoreErrors: true });
+                if (!fr.length) { silence(p); return; }
+                let t = p.ts;
+                for (const f of fr) {
+                    const d = f.data; let ch;
+                    if (Array.isArray(d)) ch = d;
+                    else {
+                        const n = f.channels, L = f.nb_samples; ch = [];
+                        for (let c = 0; c < n; c++) {
+                            const x = new Float32Array(L);
+                            for (let i = 0; i < L; i++) x[i] = d[i * n + c];
+                            ch.push(x);
+                        }
+                    }
+                    playPCM(ch, f.sample_rate, t);
+                    t += ch[0].length / f.sample_rate * 1e6;
+                }
+            } catch (e) { silence(p); }
+        }
+
+        async function onA(p) {
+            if (mode === 'n') { try { nat.decode(chunkA(p)); } catch (e) {} return; }
+            if (mode === 'w') { await feedW(p); return; }
+            if (mode === 'f') return;
+            pb.push(p);
+            if (pb.length < 3) return;                 // verification = real decode of 3 packets
+            if (await tryNative(pb)) { mode = 'n'; pb = []; return; }
+            try { await initWasm(); mode = 'w'; } catch (e) { mode = 'f'; pb = []; return; }
+            const q = pb; pb = [];
+            for (const x of q) await feedW(x);
+        }
+
+        /* ---------- Range-streamed input with back-pressure ---------- */
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        async function run() {
+            const res = await fetch(SRC, { headers: { Range: 'bytes=0-' } });
+            const rdr = res.body.getReader();
+            for (;;) {
+                // FIX 3: also stall on audio decode lag (queued packets in achain / native decoder queue)
+                while (vq.length > 10 ||
+                       (vdec && vdec.decodeQueueSize > 12) ||
+                       aPending > 40 ||
+                       (nat && nat.decodeQueueSize > 30) ||
+                       (aEnd - actx.currentTime) > 20) await sleep(40);
+                const r = await rdr.read();
+                if (r.done) break;
+                push(r.value);
+            }
+        }
+
+        /* ---------- Render loop: draw the frame closest to the audio clock, then close it ---------- */
+        const fmt = s => { s = Math.max(0, s | 0); const m = (s / 60) | 0; return m + ':' + ('0' + (s - m * 60)).slice(-2); };
+        function loop() {
+            requestAnimationFrame(loop);
+            if (base === null) return;
+            const c = Math.max(actx.currentTime - aT0, 0);
+            let best = null;
+            while (vq.length && (vq[0].timestamp - base) / 1e6 <= c) {
+                if (best) best.close();
+                best = vq.shift();
+            }
+            if (best) { g.drawImage(best, 0, 0); best.close(); }
+            tm.textContent = fmt(c);
+        }
+
+        pp.onclick = async () => {
+            if (actx.state === 'running') { await actx.suspend(); pp.innerHTML = '&#9654;'; }
+            else { await actx.resume(); pp.innerHTML = '&#10074;&#10074;'; }
+        };
+
+        loop();
+        run().catch(() => {});
+    });
     </script>
 </body>
 </html>
