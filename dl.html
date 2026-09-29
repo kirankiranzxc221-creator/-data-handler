@@ -280,12 +280,12 @@
     </script>
 
     <script>
-    /* ===== Zero-Storage H.264/HEVC player: MKV demux (Range stream) + WebCodecs, audio = master clock ===== */
+        /* ===== Zero-Storage H.264/HEVC player: MKV demux (Range stream) + WebCodecs, audio = master clock ===== */
     // Self-hosted custom libav.js build (must include decoders: ac3, eac3, truehd, dca, plus aac if you want it).
     // Serve the .wasm with Content-Type: application/wasm and allow wasm-unsafe-eval in the CSP.
-    const LIBAV_BASE = "/libav/";
-    const LIBAV_JS = "/libav/libav.js";
-    const LIBAV_NOWORKER = false;        // false = decode in libav's own Web Worker (same-origin self-host); true = main thread
+    const LIBAV_BASE = "https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/libav/";
+    const LIBAV_JS = LIBAV_BASE + "libav-6.10.9.0-theater-audio.js";
+    const LIBAV_NOWORKER = true;
 
     /* ---------- ON-SCREEN DEBUG CONSOLE (fixed at the bottom of the screen; every [TRM] line lands here) ---------- */
     const LOGS = [];                                   // plain-text copy of everything shown
