@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>%s</title>
+    <link rel="stylesheet" href="https://cdn.plyr.io/3.6.12/plyr.css" />
     <style>
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
@@ -18,7 +19,7 @@
         .header-box {
             width: 100%%;
             aspect-ratio: 3.4 / 1;
-            background-image: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp');
+            background-image: url('https://raw.githubusercontent.com/trm-admin/-data-handler/main/images/Background.png');
             background-size: cover;
             background-position: center top;
             background-repeat: no-repeat;
@@ -36,9 +37,7 @@
             text-overflow: ellipsis;
         }
 
-        /* ================= PLAYER (Plyr-style) ================= */
         .player-placeholder {
-            position: relative;
             width: 90%%;
             max-width: 400px;
             aspect-ratio: 16 / 9;
@@ -47,97 +46,14 @@
             box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
             margin: 0 auto;
             background: #000;
-            user-select: none;
-            -webkit-user-select: none;
-            -webkit-tap-highlight-color: transparent;
-            outline: none;
         }
-        .player-placeholder:fullscreen {
-            max-width: none; width: 100vw; height: 100vh;
-            border-radius: 0; aspect-ratio: auto; box-shadow: none;
-        }
-        .player-placeholder:-webkit-full-screen {
-            max-width: none; width: 100vw; height: 100vh;
-            border-radius: 0; aspect-ratio: auto; box-shadow: none;
-        }
-        #cv { width: 100%%; height: 100%%; object-fit: contain; display: block; cursor: pointer; background: #000; }
+        
+        .plyr { width: 100%%; height: 100%%; }
 
-        .player-placeholder svg { width: 16px; height: 16px; fill: currentColor; display: block; }
-
-        /* big centered play button */
-        .bigplay {
-            position: absolute;
-            top: 50%%; left: 50%%;
-            width: 64px; height: 64px;
-            margin: -32px 0 0 -32px;
-            border: 0; border-radius: 50%%;
-            background: #00b3ff; color: #fff;
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; padding: 0; z-index: 3;
-            box-shadow: 0 2px 16px rgba(0, 179, 255, 0.55);
-            transition: transform .2s ease, opacity .25s ease, background .2s ease;
+        /* பழைய பிளேயரின் உள்ளே இருக்கும் டவுன்லோட் ஐகானை மட்டும் கண்களுக்குத் தெரியாமல் மறைக்கிறோம் */
+        [data-plyr="download"] {
+            display: none !important;
         }
-        .bigplay svg { width: 30px; height: 30px; margin-left: 4px; }
-        .bigplay:hover { background: #1fc0ff; transform: scale(1.08); }
-        .bigplay:active { transform: scale(0.95); }
-        .player-placeholder.playing .bigplay { opacity: 0; pointer-events: none; transform: scale(0.8); }
-
-        /* buffering spinner (only while playing and no frame yet) */
-        .spin {
-            display: none;
-            position: absolute; top: 50%%; left: 50%%;
-            width: 38px; height: 38px; margin: -19px 0 0 -19px;
-            border: 3px solid rgba(255, 255, 255, 0.25);
-            border-top-color: #00b3ff;
-            border-radius: 50%%;
-            animation: trmspin .9s linear infinite;
-            z-index: 2; pointer-events: none;
-        }
-        .player-placeholder.loading.playing .spin { display: block; }
-        @keyframes trmspin { to { transform: rotate(360deg); } }
-
-        /* bottom control bar */
-        .ctl {
-            position: absolute; left: 0; right: 0; bottom: 0;
-            display: flex; align-items: center; gap: 6px;
-            padding: 24px 8px 6px;
-            background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.8));
-            color: #fff; font-size: 11px; z-index: 2;
-            transition: opacity .3s ease, transform .3s ease;
-        }
-        .player-placeholder.playing.hide .ctl { opacity: 0; transform: translateY(8px); pointer-events: none; }
-        .player-placeholder.playing.hide { cursor: none; }
-
-        .cbtn {
-            flex: none; width: 28px; height: 28px; padding: 0;
-            background: none; border: 0; border-radius: 4px; color: #fff;
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; transition: background .15s ease;
-        }
-        .cbtn:hover, .cbtn:focus-visible { background: #00b3ff; outline: none; }
-
-        .tm {
-            flex: none; font-weight: 600; font-variant-numeric: tabular-nums;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-        }
-        .bar {
-            position: relative; flex: 1; min-width: 20px; height: 5px;
-            border-radius: 3px; background: rgba(255, 255, 255, 0.28); overflow: hidden;
-        }
-        .fill {
-            position: absolute; top: 0; bottom: 0; left: 0; right: 0;
-            background: #00b3ff; transform-origin: left center; transform: scaleX(0);
-        }
-
-        /* icon toggles */
-        .i-pause, .i-mute, .i-fsx { display: none; }
-        .player-placeholder.playing .i-play { display: none; }
-        .player-placeholder.playing .i-pause { display: block; }
-        .player-placeholder.muted .i-vol { display: none; }
-        .player-placeholder.muted .i-mute { display: block; }
-        .player-placeholder.isfs .i-fs { display: none; }
-        .player-placeholder.isfs .i-fsx { display: block; }
-        /* ======================================================= */
 
         .choose-option {
             width: 90%%;
@@ -217,36 +133,16 @@
 <body>
 
     <div class="header-box"></div>
-
+    
     <div class="movie-title">
         <marquee direction="left">%s</marquee>
     </div>
 
-    <div class="player-placeholder loading" id="pl" tabindex="0">
-        <canvas id="cv" width="640" height="360" data-src="%s"></canvas>
-        <div class="spin"></div>
-
-        <button class="bigplay" id="big" aria-label="Play">
-            <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-        </button>
-
-        <div class="ctl" id="ctl">
-            <button class="cbtn" id="pp" aria-label="Play/Pause">
-                <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                <svg class="i-pause" viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
-            </button>
-            <span class="tm" id="tm">0:00</span>
-            <div class="bar"><div class="fill" id="fill"></div></div>
-            <span class="tm" id="dur">0:00</span>
-            <button class="cbtn" id="mute" aria-label="Mute">
-                <svg class="i-vol" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
-                <svg class="i-mute" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M15.5 9.5l5 5m0-5l-5 5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-            </button>
-            <button class="cbtn" id="fs" aria-label="Fullscreen">
-                <svg class="i-fs" viewBox="0 0 24 24"><path d="M5 5h5v2H7v3H5V5zm9 0h5v5h-2V7h-3V5zM5 14h2v3h3v2H5v-5zm12 0h2v5h-5v-2h3v-3z"/></svg>
-                <svg class="i-fsx" viewBox="0 0 24 24"><path d="M8 5h2v5H5V8h3V5zm6 0h2v3h3v2h-5V5zM5 14h5v5H8v-3H5v-2zm9 0h5v2h-3v3h-2v-5z"/></svg>
-            </button>
-        </div>
+    <!-- பழைய கோடிங் மாதிரியே controls செட் செய்யப்பட்டுள்ளது, ஆனால் ஐகான் css மூலம் மறைக்கப்பட்டுள்ளது -->
+    <div class="player-placeholder">
+        <video id="main-video" class="player" playsinline controls>
+            <source src="%s" type="video/mp4" />
+        </video>
     </div>
 
     <div class="choose-option">
@@ -255,17 +151,25 @@
     </div>
 
     <div class="buttons-container">
-        <a id="link-dl" href="%s" download="%s"><img src="https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Download.webp" class="btn-img" alt="Download Video"></a>
-        <a id="link-vlc" href="#"><img src="https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/VLC_Player.webp" class="btn-img" alt="PLAY IN VLC"></a>
-        <a id="link-playit" href="#"><img src="https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/PlayIt_Player.webp" class="btn-img" alt="PLAY IN PLAYit"></a>
+        <!-- href இப்போது ?dl=1 உடன் நேரடியாக attachment டவுன்லோடை தூண்டுகிறது -->
+        <a id="link-dl" href="%s" download="%s"><img src="https://raw.githubusercontent.com/trm-admin/-data-handler/main/images/Download.png" class="btn-img" alt="Download Video"></a>
+        <a id="link-vlc" href="#"><img src="https://raw.githubusercontent.com/trm-admin/-data-handler/main/images/VLC%20Player.png" class="btn-img" alt="PLAY IN VLC"></a>
+        <a id="link-playit" href="#"><img src="https://raw.githubusercontent.com/trm-admin/-data-handler/main/images/PlayIt%20Player.png" class="btn-img" alt="PLAY IN PLAYit"></a>
     </div>
 
     <div class="footer-box"></div>
 
+    <script src="https://cdn.plyr.io/3.6.12/plyr.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const videoSrc = new URL(document.getElementById('cv').dataset.src, location.href).href;
+            const player = new Plyr('.player', {
+                controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen']
+            });
 
+            const videoElement = document.getElementById('main-video');
+            const videoSrc = videoElement.querySelector('source').src;
+
+            // பச்சை பட்டனை அழுத்தும்போது ?dl=1 உள்ள href-க்கு நேரடியாக செல்கிறோம், இது Worker-ல் attachment header-ஐ தூண்டும்
             document.getElementById('link-dl').addEventListener('click', function(e) {
                 e.preventDefault();
                 window.location.href = this.getAttribute('href');
@@ -276,704 +180,8 @@
 
             const playitUrl = videoSrc.replace(/^https?:\/\//, '');
             document.getElementById('link-playit').href = "intent://" + playitUrl + "#Intent;package=com.playit.videoplayer;type=video/*;scheme=https;end";
+
         });
-    </script>
-
-    <script>
-        /* ===== Zero-Storage H.264/HEVC player: MKV demux (Range stream) + WebCodecs, audio = master clock ===== */
-    // Self-hosted custom libav.js build (must include decoders: ac3, eac3, truehd, dca, plus aac if you want it).
-    // Serve the .wasm with Content-Type: application/wasm and allow wasm-unsafe-eval in the CSP.
-    const LIBAV_BASE = "https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/libav/";
-    const LIBAV_JS = LIBAV_BASE + "libav-6.10.9.0-theater-audio.js";
-    const LIBAV_NOWORKER = true;
-
-    /* ---------- ON-SCREEN DEBUG CONSOLE (fixed at the bottom of the screen; every [TRM] line lands here) ---------- */
-    const LOGS = [];                                   // plain-text copy of everything shown
-    let dbgBody = null;
-    (function buildDebugUI() {
-        const box = document.createElement('div');
-        box.id = 'trmdbg';
-        box.style.cssText = 'position:fixed;left:6px;right:6px;bottom:6px;height:38vh;z-index:99999;display:flex;flex-direction:column;' +
-            'background:rgba(0,0,0,0.82);border:1px solid rgba(0,255,255,0.45);border-radius:8px;overflow:hidden;font-family:monospace;';
-        const bar = document.createElement('div');
-        bar.style.cssText = 'display:flex;gap:6px;align-items:center;padding:4px 6px;background:rgba(0,40,50,0.95);color:#0ff;font-size:11px;flex:none;';
-        const title = document.createElement('span');
-        title.textContent = 'TRM debug';
-        title.style.cssText = 'flex:1;font-weight:bold;';
-        const mk = (label) => {
-            const b = document.createElement('button');
-            b.textContent = label;
-            b.style.cssText = 'background:#063;color:#fff;border:1px solid #0f8;border-radius:4px;font-size:11px;padding:4px 10px;';
-            return b;
-        };
-        const bCopy = mk('Copy'), bClr = mk('Clear'), bMin = mk('Min');
-        bar.appendChild(title); bar.appendChild(bCopy); bar.appendChild(bClr); bar.appendChild(bMin);
-        dbgBody = document.createElement('div');
-        dbgBody.style.cssText = 'flex:1;overflow:auto;padding:4px 6px;font-size:10px;line-height:1.35;color:#cfe;white-space:pre-wrap;' +
-            'word-break:break-all;user-select:text;-webkit-user-select:text;-webkit-overflow-scrolling:touch;';
-        box.appendChild(bar); box.appendChild(dbgBody);
-        document.body.appendChild(box);
-
-        bClr.onclick = () => { LOGS.length = 0; dbgBody.textContent = ''; };
-        bMin.onclick = () => {
-            const hidden = dbgBody.style.display === 'none';
-            dbgBody.style.display = hidden ? 'block' : 'none';
-            box.style.height = hidden ? '38vh' : 'auto';
-            bMin.textContent = hidden ? 'Min' : 'Max';
-        };
-        bCopy.onclick = () => {
-            const text = LOGS.join('\n');
-            const fallback = () => {
-                try {
-                    const ta = document.createElement('textarea');
-                    ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
-                    document.body.appendChild(ta); ta.focus(); ta.select();
-                    const ok = document.execCommand('copy');
-                    document.body.removeChild(ta);
-                    bCopy.textContent = ok ? 'Copied!' : 'Copy failed';
-                } catch (e) { bCopy.textContent = 'Copy failed'; }
-                setTimeout(() => { bCopy.textContent = 'Copy'; }, 1500);
-            };
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text)
-                    .then(() => { bCopy.textContent = 'Copied!'; setTimeout(() => { bCopy.textContent = 'Copy'; }, 1500); })
-                    .catch(fallback);
-            } else fallback();
-        };
-    })();
-
-    function ui(line, isErr) {
-        LOGS.push(line);
-        if (LOGS.length > 1500) LOGS.shift();
-        if (!dbgBody) return;
-        const nearBottom = dbgBody.scrollHeight - dbgBody.scrollTop - dbgBody.clientHeight < 40;
-        const d = document.createElement('div');
-        d.textContent = line;                                  // textContent: no HTML injection
-        d.style.color = isErr ? '#ff5555' : '#cfe';
-        if (isErr) d.style.fontWeight = 'bold';
-        dbgBody.appendChild(d);
-        while (dbgBody.childNodes.length > 600) dbgBody.removeChild(dbgBody.firstChild);
-        if (nearBottom) dbgBody.scrollTop = dbgBody.scrollHeight;
-    }
-
-    /* ---------- logging helpers: console + on-screen, filter the console by "[TRM]" ---------- */
-    const T0 = performance.now();
-    const stamp = t => '[TRM][' + t + ' +' + Math.round(performance.now() - T0) + 'ms]';
-    const argStr = a => {
-        if (typeof a === 'string') return a;
-        if (a instanceof Error) return a.name + ': ' + a.message;
-        if (a && typeof a === 'object' && a.message) return String(a.name || 'Error') + ': ' + a.message;
-        try { return JSON.stringify(a); } catch (e) { return String(a); }
-    };
-    const log = (t, ...a) => { console.log(stamp(t), ...a); ui(stamp(t) + ' ' + a.map(argStr).join(' '), false); };
-    const err = (t, ...a) => { console.error(stamp(t), ...a); ui('ERR ' + stamp(t) + ' ' + a.map(argStr).join(' '), true); };
-    const eN = {};
-    const errT = (t, ...a) => {                      // throttled error: first 5 only
-        eN[t] = (eN[t] || 0) + 1;
-        if (eN[t] <= 5) err(t, ...a);
-        else if (eN[t] === 6) err(t, '(further errors of this kind suppressed)');
-    };
-    const hex = (u, n) => u ? Array.from(u.slice(0, n || 24)).map(x => ('0' + x.toString(16)).slice(-2)).join(' ') : '(none)';
-    window.addEventListener('error', e => err('WINDOW', e.message, e.filename, e.lineno));
-    window.addEventListener('unhandledrejection', e => err('PROMISE', e.reason && (e.reason.message || e.reason)));
-    document.addEventListener('securitypolicyviolation', e => err('CSP', 'blocked:', e.blockedURI, 'directive:', e.violatedDirective));
-
-    log('LOGGER', 'on-screen debug console ready');
-    log('ENV', 'secureContext', window.isSecureContext,
-        '| VideoDecoder', typeof VideoDecoder, '| AudioDecoder', typeof AudioDecoder,
-        '| EncodedVideoChunk', typeof EncodedVideoChunk,
-        '| AudioContext', typeof (window.AudioContext || window.webkitAudioContext));
-    log('ENV', 'UA', navigator.userAgent);
-    if (!window.isSecureContext) err('ENV', 'NOT a secure context (page must be https). WebCodecs is undefined here, so video and native audio cannot work.');
-
-    document.addEventListener('DOMContentLoaded', () => {
-        const $ = id => document.getElementById(id);
-        const pl = $('pl'), cv = $('cv'), g = cv.getContext('2d');
-        const pp = $('pp'), big = $('big'), tm = $('tm'), durEl = $('dur'), fill = $('fill');
-        const muteBtn = $('mute'), fsBtn = $('fs');
-        const SRC = new URL(cv.dataset.src, location.href).href;
-        log('NET', 'source URL:', SRC, '| page origin:', location.origin);
-
-        const actx = new (window.AudioContext || window.webkitAudioContext)();
-        const mg = actx.createGain();
-        // force a stereo bus: 5.1 sources are downmixed with the standard Web Audio "speakers" coefficients
-        mg.channelCount = 2; mg.channelCountMode = 'explicit'; mg.channelInterpretation = 'speakers';
-        mg.connect(actx.destination);
-        log('AUDIO', 'AudioContext created, state:', actx.state, 'sampleRate:', actx.sampleRate, '| destination maxChannelCount:', actx.destination.maxChannelCount);
-        actx.suspend().catch(e => err('AUDIO', 'initial suspend failed', e));
-        const aT0 = actx.currentTime + 0.3;          // media time 0 == ctx time aT0 (pre-roll)
-        let aEnd = 0;                                // ctx time where scheduled audio ends (back-pressure)
-        let base = null;                             // set ONLY by the first audio packet (us), subtracted once
-        const vq = [];                               // decoded VideoFrames awaiting display
-        const vPend = [];                            // video chunks held until audio sets base
-        const C = { bytes: 0, blocks: 0, vIn: 0, vOut: 0, vDrawn: 0, aIn: 0, aOut: 0, aLate: 0 };
-
-        /* ---------- Matroska (EBML) streaming demuxer ---------- */
-        const MASTER = {0x18538067:1,0x1654AE6B:1,0xAE:1,0xE0:1,0xE1:1,0x1F43B675:1,0xA0:1,0x1549A966:1};
-        const LEAF = new Set([0xA3,0xA1,0xE7,0xD7,0x83,0x86,0x63A2,0xB0,0xBA,0xB5,0x9F,0x2AD7B1,0x4489,0x88]);
-        let buf = new Uint8Array(0), skip = 0, scale = 1000000, ctc = 0, durTicks = 0;
-        let tks = [], cur = null, sel = false, V = null, A = null;
-        let magic = false, bad = false;
-
-        function rd(b, p, keep) {
-            if (p >= b.length) return null;
-            let len = 1, mask = 0x80;
-            while (len <= 8 && !(b[p] & mask)) { mask >>= 1; len++; }
-            if (len > 8 || p + len > b.length) return null;
-            let v = keep ? b[p] : (b[p] & (mask - 1));
-            for (let i = 1; i < len; i++) v = v * 256 + b[p + i];
-            return [v, len];
-        }
-
-        function push(chunk) {
-            if (bad) return;
-            if (skip) {
-                if (chunk.length <= skip) { skip -= chunk.length; return; }
-                chunk = chunk.subarray(skip); skip = 0;
-            }
-            const n = new Uint8Array(buf.length + chunk.length);
-            n.set(buf); n.set(chunk, buf.length); buf = n;
-
-            if (!magic) {
-                if (buf.length < 8) return;
-                magic = true;
-                if (!(buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA3)) {
-                    bad = true;
-                    const mp4 = String.fromCharCode(buf[4], buf[5], buf[6], buf[7]) === 'ftyp';
-                    err('MKV', 'NOT a Matroska file. First bytes:', hex(buf, 16),
-                        mp4 ? '=> looks like MP4 (ftyp). This build only demuxes MKV.' : '=> unknown container (or the server returned an error page/JSON).');
-                    return;
-                }
-                log('MKV', 'EBML header OK (1A 45 DF A3)');
-            }
-
-            let p = 0;
-            for (;;) {
-                const a = rd(buf, p, true); if (!a) break;
-                const b = rd(buf, p + a[1], false); if (!b) break;
-                const id = a[0], hl = a[1] + b[1];
-                let sz = b[0];
-                if (sz === Math.pow(2, 7 * b[1]) - 1) sz = -1;
-                if (MASTER[id] || sz < 0) {
-                    if (id === 0xAE) { cur = {}; tks.push(cur); }
-                    p += hl; continue;
-                }
-                if (LEAF.has(id)) {
-                    if (p + hl + sz > buf.length) break;
-                    leaf(id, buf.subarray(p + hl, p + hl + sz));
-                    p += hl + sz;
-                } else {
-                    const av = buf.length - p - hl;
-                    if (av >= sz) { p += hl + sz; }
-                    else { skip = sz - av; p = buf.length; break; }
-                }
-            }
-            buf = buf.subarray(p);
-        }
-
-        function leaf(id, d) {
-            const u = () => { let v = 0; for (const x of d) v = v * 256 + x; return v; };
-            const dv = () => new DataView(d.buffer, d.byteOffset, d.byteLength);
-            switch (id) {
-                case 0x2AD7B1: scale = u(); break;
-                case 0x4489: durTicks = d.length === 4 ? dv().getFloat32(0) : dv().getFloat64(0); break;
-                case 0xE7: ctc = u(); break;
-                case 0xD7: if (cur) cur.n = u(); break;
-                case 0x83: if (cur) cur.t = u(); break;
-                case 0x88: if (cur) cur.d = u(); break;          // FlagDefault (absent means default = 1)
-                case 0x86: if (cur) cur.c = new TextDecoder().decode(d); break;
-                case 0x63A2: if (cur) cur.p = d.slice(); break;
-                case 0xB0: if (cur) cur.w = u(); break;
-                case 0xBA: if (cur) cur.h = u(); break;
-                case 0xB5: if (cur) cur.sr = d.length === 4 ? dv().getFloat32(0) : dv().getFloat64(0); break;
-                case 0x9F: if (cur) cur.ch = u(); break;
-                case 0xA3: case 0xA1: block(d, id); break;
-            }
-        }
-
-        let vStarted = false, vFail = false;
-
-        function feedV(data, ts, k) {
-            const key = k === null ? !vStarted : k;      // BlockGroup blocks: only the first is treated as key
-            if (!vdec && !vFail) initV();
-            if (!vdec) return;
-            if (!vStarted) {
-                if (!key) { errT('VIDEO', 'dropping leading non-key chunk (waiting for first keyframe)'); return; }
-                vStarted = true;
-                log('VIDEO', 'first keyframe fed to decoder: ts', ts, 'bytes', data.length, '| first 8 bytes:', hex(data, 8));
-            }
-            try {
-                vdec.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: ts, data }));
-                C.vIn++;
-            } catch (e) { errT('VIDEO', 'vdec.decode() threw. decoder state:', vdec.state, e && e.name, e && e.message); }
-        }
-
-        function block(d, id) {
-            if (!sel) {
-                sel = true;
-                V = tks.find(t => t.t === 1);                                             // first video track
-                A = tks.find(t => t.t === 2 && t.d !== 0) || tks.find(t => t.t === 2);    // default (else first) audio track only
-                log('MKV', 'timecodeScale(ns)', scale, '| duration ticks', durTicks, '| tracks found:', tks.length);
-                tks.forEach(t => {
-                    log('MKV', 'track', JSON.stringify({ n: t.n, type: t.t, codec: t.c, w: t.w, h: t.h, sr: t.sr, ch: t.ch, flagDefault: t.d, privLen: t.p ? t.p.length : 0 }),
-                        '| CodecPrivate:', hex(t.p, 32));
-                });
-                if (!V) err('MKV', 'NO video track found');
-                else if (V.c !== 'V_MPEGH/ISO/HEVC' && V.c !== 'V_MPEG4/ISO/AVC') err('MKV', 'video codec is', V.c, '(only HEVC and H.264/AVC are handled)');
-                else log('MKV', 'video codec:', V.c, V.c === 'V_MPEG4/ISO/AVC' ? '(H.264, using avcC)' : '(HEVC, using hvcC)');
-                if (!A) err('MKV', 'NO audio track found. Audio is the master clock and base is set only by audio, so video will wait forever.');
-                else log('MKV', 'selected audio track: number', A.n, 'codec', A.c, 'sr', A.sr, 'ch', A.ch);
-            }
-            const r = rd(d, 0, false); if (!r) return;
-            const l = r[1], tn = r[0];
-            const rel = ((d[l] << 8) | d[l + 1]) << 16 >> 16;
-            const fl = d[l + 2];
-            C.blocks++;
-            if (C.blocks === 1) log('MKV', 'first block: track', tn, 'relTs', rel, 'flags', fl, 'clusterTs', ctc);
-            if (fl & 6) { errT('MKV', 'laced block skipped (lacing not supported), track', tn); return; }
-            const data = d.subarray(l + 3);
-            const ts = (ctc + rel) * scale / 1000;   // microseconds
-            if (A && tn === A.n) {
-                if (base === null) {             // base is set ONLY here, by the first audio packet
-                    base = ts;
-                    log('SYNC', 'base set from first audio packet (us):', base, '| releasing', vPend.length, 'held video chunks');
-                    while (vPend.length) { const v = vPend.shift(); feedV(v.d, v.ts, v.k); }
-                }
-                aPending++; C.aIn++;
-                achain = achain.then(() => onA({ data, ts })).catch(e => errT('AUDIO', 'onA threw', e && e.message || e)).then(() => { aPending--; });
-            } else if (V && tn === V.n) {
-                const k = id === 0xA3 ? !!(fl & 0x80) : null;
-                if (base === null) {
-                    if (vPend.length < 600) vPend.push({ d: data, ts, k });
-                    else errT('SYNC', 'video hold queue full (600) while waiting for the first audio packet');
-                    return;
-                }
-                feedV(data, ts, k);
-            }
-        }
-
-        /* ---------- Video (hardware WebCodecs, H.264 + HEVC; no fallback UI, silent freeze if unsupported) ---------- */
-        let vdec = null;
-
-        // validated hvcC -> RFC 6381 codec string; returns null if the record looks malformed
-        function hevcStr(h) {
-            try {
-                if (!h || h.length < 13 || h[0] !== 1) return null;   // configurationVersion must be 1
-                const sp = (h[1] >> 6) & 3, tier = (h[1] >> 5) & 1, pf = h[1] & 31;
-                let c = ((h[2] << 24) | (h[3] << 16) | (h[4] << 8) | h[5]) >>> 0, r = 0;
-                for (let i = 0; i < 32; i++) { r = ((r << 1) | (c & 1)) >>> 0; c >>>= 1; }   // reverse 32 compat bits
-                const k = Array.from(h.slice(6, 12));
-                while (k.length && k[k.length - 1] === 0) k.pop();                            // drop trailing zero bytes
-                return 'hvc1.' + ['', 'A', 'B', 'C'][sp] + pf + '.' + r.toString(16) + '.' + (tier ? 'H' : 'L') + h[12] +
-                    k.map(x => '.' + x.toString(16).toUpperCase()).join('');
-            } catch (e) { err('VIDEO', 'hevcStr() threw', e); return null; }
-        }
-
-        // validated avcC -> "avc1.PPCCLL" (profile_idc, constraint flags, level_idc); null if malformed
-        function avcStr(h) {
-            try {
-                if (!h || h.length < 7 || h[0] !== 1) return null;    // configurationVersion must be 1
-                const x = n => ('0' + n.toString(16)).slice(-2);
-                return 'avc1.' + x(h[1]) + x(h[2]) + x(h[3]);
-            } catch (e) { err('VIDEO', 'avcStr() threw', e); return null; }
-        }
-
-        function onFrame(f) {
-            C.vOut++;
-            if (C.vOut === 1) log('VIDEO', 'FIRST FRAME DECODED: ts', f.timestamp, 'coded', f.codedWidth + 'x' + f.codedHeight, 'format', f.format);
-            vq.push(f);
-        }
-
-        function initV() {
-            vFail = true;                                   // stays true unless a configure() succeeds
-            if (typeof VideoDecoder === 'undefined') { err('VIDEO', 'VideoDecoder is undefined (insecure context or unsupported browser)'); return; }
-            const isH = V.c === 'V_MPEGH/ISO/HEVC', isA = V.c === 'V_MPEG4/ISO/AVC';
-            if (!isH && !isA) { err('VIDEO', 'unsupported video codec', V.c, '- only HEVC and H.264/AVC are handled. Video will stay frozen.'); return; }
-            const recName = isH ? 'hvcC' : 'avcC';
-            if (!V.p) err('VIDEO', 'video track has NO CodecPrivate (' + recName + '). configure() will fail.');
-            else log('VIDEO', recName, 'bytes:', V.p.length, '|', hex(V.p, 40));
-            try { cv.width = V.w; cv.height = V.h; } catch (e) { err('VIDEO', 'canvas resize failed', e); }
-            const gen = isH ? hevcStr(V.p) : avcStr(V.p);
-            log('VIDEO', 'generated codec string:', gen);
-            if (!gen) err('VIDEO', recName + ' failed validation (too short or version not 1)');
-            const cands = (isH ? [gen, 'hvc1', 'hev1'] : [gen]).filter((x, i, a) => x && a.indexOf(x) === i);
-
-            // DEBUG ONLY (never gates anything): log what the browser says about each candidate
-            cands.forEach(codec => ['prefer-hardware', 'prefer-software'].forEach(hw => {
-                try {
-                    VideoDecoder.isConfigSupported({ codec, codedWidth: V.w, codedHeight: V.h, description: V.p, hardwareAcceleration: hw })
-                        .then(r => log('VIDEO', 'isConfigSupported(debug)', codec, hw, '=> supported:', r.supported))
-                        .catch(e => err('VIDEO', 'isConfigSupported(debug) rejected', codec, hw, e && e.message));
-                } catch (e) { err('VIDEO', 'isConfigSupported(debug) threw', codec, hw, e && e.message); }
-            }));
-
-            for (const codec of cands) {
-                try {
-                    const d = new VideoDecoder({
-                        output: onFrame,
-                        error: e => err('VIDEO', 'DECODER ERROR CALLBACK (decoder is now closed):', e && e.name, e && e.message, '| codec', codec)
-                    });
-                    d.configure({ codec, codedWidth: V.w, codedHeight: V.h, description: V.p, hardwareAcceleration: 'prefer-hardware' });
-                    vdec = d; vFail = false;
-                    log('VIDEO', 'configure() accepted synchronously with:', codec, '(async errors, if any, appear as DECODER ERROR CALLBACK)');
-                    return;
-                } catch (e) { err('VIDEO', 'configure() threw for', codec, ':', e && e.name, e && e.message); }
-            }
-            err('VIDEO', 'all codec candidates failed to configure. Video will stay frozen.');
-        }
-
-        /* ---------- Audio: native AudioDecoder (verified by real decode) -> self-hosted libav.js WASM fallback ---------- */
-        // WebCodecs codec strings. Codecs missing here (DTS, TrueHD) have no native path and go straight to WASM.
-        const NC = { A_AAC: 'mp4a.40.2', A_OPUS: 'opus', A_FLAC: 'flac', A_VORBIS: 'vorbis', A_AC3: 'ac-3', A_EAC3: 'ec-3', 'A_MPEG/L3': 'mp3' };
-        // libav decoder names your custom build must contain
-        const LAV = { A_AAC: 'aac', A_AC3: 'ac3', A_EAC3: 'eac3', A_DTS: 'dca', A_TRUEHD: 'truehd', 'A_MPEG/L3': 'mp3' };
-        let achain = Promise.resolve(), aPending = 0, mode = null, pb = [], probing = false;
-        let nat = null, la = null, lc = null, lpkt = null, lfr = null;
-
-        // Gapless scheduling: buffers are laid back to back on a running cursor (aNext). Late buffers are
-        // trimmed (start offset) or dropped instead of being started "in the past".
-        let aNext = 0, aHave = false;
-        function playPCM(ch, sr, tsUs) {
-            if (base === null) return;
-            const L = ch[0].length, dur = L / sr, now = actx.currentTime;
-            const t = aT0 + (tsUs - base) / 1e6;
-            if (!aHave || Math.abs(t - aNext) > 0.05) {
-                if (aHave) errT('AUDIO', 'timestamp jump: resync cursor. expected', aNext.toFixed(3), 'got', t.toFixed(3));
-                aNext = t; aHave = true;
-            }
-            const when = aNext;
-            aNext += dur; aEnd = aNext;
-            if (when + dur <= now) { C.aLate++; errT('AUDIO', 'buffer completely late, dropped. lateBy(s)=', (now - when - dur).toFixed(3)); return; }
-            const b = actx.createBuffer(ch.length, L, sr);
-            ch.forEach((x, i) => b.copyToChannel(x, i));
-            const s = actx.createBufferSource();
-            s.buffer = b; s.connect(mg);
-            if (when < now) s.start(now, now - when);                                  // partially late: trim the start
-            else s.start(when);
-            C.aOut++;
-            if (C.aOut === 1) log('AUDIO', 'FIRST AUDIO BUFFER SCHEDULED: ch', ch.length, 'sr', sr, 'frames', L, 'when', when.toFixed(3), 'ctxNow', now.toFixed(3), 'ctxState', actx.state);
-        }
-        function playAD(a) {
-            try {
-                const ch = [];
-                for (let c = 0; c < a.numberOfChannels; c++) {
-                    const x = new Float32Array(a.numberOfFrames);
-                    a.copyTo(x, { planeIndex: c, format: 'f32-planar' });
-                    ch.push(x);
-                }
-                const sr = a.sampleRate, ts = a.timestamp;
-                a.close();
-                playPCM(ch, sr, ts);
-            } catch (e) { errT('AUDIO', 'playAD failed (copyTo f32-planar?)', e && e.name, e && e.message); try { a.close(); } catch (x) {} }
-        }
-        const chunkA = p => new EncodedAudioChunk({ type: 'key', timestamp: p.ts, data: p.data });
-
-        async function tryNative(pk) {
-            const codec = NC[A.c];
-            if (!codec) { log('AUDIO', 'no WebCodecs mapping for', A.c, '-> no native path, going straight to WASM'); return false; }
-            if (typeof AudioDecoder === 'undefined') { err('AUDIO', 'AudioDecoder is undefined -> going to WASM'); return false; }
-            const cfg = { codec, sampleRate: A.sr || 48000, numberOfChannels: A.ch || 2, description: A.p };
-            log('AUDIO', 'native probe: track', A.c, '-> WebCodecs codec', codec, '| sr', cfg.sampleRate, 'ch', cfg.numberOfChannels, '| description', hex(A.p, 8));
-            try {
-                AudioDecoder.isConfigSupported(cfg)
-                    .then(r => log('AUDIO', 'isConfigSupported(debug, not trusted)', codec, '=> supported:', r.supported))
-                    .catch(e => err('AUDIO', 'isConfigSupported(debug) rejected', e && e.message));
-            } catch (e) { err('AUDIO', 'isConfigSupported(debug) threw', e && e.message); }
-            const outs = [];
-            let d = null;
-            try {
-                probing = true;
-                d = new AudioDecoder({
-                    output: a => (probing ? outs.push(a) : playAD(a)),
-                    error: e => err('AUDIO', 'AudioDecoder ERROR CALLBACK:', e && e.name, e && e.message)
-                });
-                d.configure(cfg);
-                pk.forEach(p => d.decode(chunkA(p)));
-                await d.flush();
-                probing = false;
-                log('AUDIO', 'native probe finished: outputs =', outs.length, '| decoder state', d.state);
-                if (!outs.length || d.state === 'closed') {
-                    err('AUDIO', 'native decode produced no audio -> going to WASM');
-                    outs.forEach(a => { try { a.close(); } catch (x) {} });
-                    try { d.close(); } catch (x) {}
-                    return false;
-                }
-                nat = d;
-                outs.forEach(playAD);
-                return true;
-            } catch (e) {
-                probing = false;
-                outs.forEach(a => { try { a.close(); } catch (x) {} });
-                try { if (d) d.close(); } catch (x) {}
-                err('AUDIO', 'native probe THREW -> going to WASM:', e && e.name, e && e.message);
-                return false;
-            }
-        }
-
-        async function initWasm() {
-            const name = LAV[A.c];
-            if (!name) { err('WASM', 'no libav decoder mapping for audio codec', A.c, '(add it to the LAV table)'); throw new Error('no libav decoder for ' + A.c); }
-            log('WASM', 'loading self-hosted libav.js: script', LIBAV_JS, '| base', LIBAV_BASE, '| decoder needed:', name, '| noworker:', LIBAV_NOWORKER);
-            try {
-                const r = await fetch(LIBAV_JS, { method: 'HEAD' });
-                log('WASM', 'HEAD', LIBAV_JS, '=> status', r.status, '| content-type', r.headers.get('content-type'));
-                if (!r.ok) err('WASM', 'libav script returned HTTP', r.status, '(is /libav/ actually served by this origin?)');
-            } catch (e) { err('WASM', 'HEAD', LIBAV_JS, 'failed (network / CORS / blocked):', e && e.message); }
-            window.LibAV = { base: LIBAV_BASE };
-            await new Promise((ok, no) => {
-                const s = document.createElement('script');
-                s.src = LIBAV_JS;
-                s.onload = () => { log('WASM', 'libav script loaded'); ok(); };
-                s.onerror = () => { err('WASM', 'libav script FAILED to load:', LIBAV_JS, '(404, wrong path, or blocked by CSP script-src)'); no(new Error('libav script load failed')); };
-                document.head.appendChild(s);
-            });
-            if (typeof LibAV.LibAV !== 'function') {
-                err('WASM', 'script loaded but LibAV.LibAV is not a function. LibAV keys:', Object.keys(LibAV));
-                throw new Error('LibAV.LibAV missing');
-            }
-            try {
-                la = await LibAV.LibAV(LIBAV_NOWORKER ? { noworker: true } : {});
-                log('WASM', 'LibAV instance created (wasm loaded)');
-            } catch (e) {
-                err('WASM', 'LibAV.LibAV() FAILED. Usual causes: .wasm/.wasm.js files missing under', LIBAV_BASE, '| wrong MIME (must be application/wasm) | CSP missing wasm-unsafe-eval | WebAssembly unsupported. Error:', e && e.message || e);
-                throw e;
-            }
-            try {
-                const r = await la.ff_init_decoder(name);
-                lc = r[1]; lpkt = r[2]; lfr = r[3];
-                log('WASM', 'decoder initialised:', name);
-            } catch (e) {
-                err('WASM', 'ff_init_decoder(' + name + ') FAILED. Your custom libav.js build does not contain the "' + name + '" decoder:', e && e.message || e);
-                throw e;
-            }
-        }
-
-        function adts(data) {
-            const a = A.p, obj = a[0] >> 3, sfi = ((a[0] & 7) << 1) | (a[1] >> 7), ch = (a[1] >> 3) & 15;
-            const fl = data.length + 7, o = new Uint8Array(fl);
-            o[0] = 0xFF; o[1] = 0xF1;
-            o[2] = ((obj - 1) << 6) | (sfi << 2) | (ch >> 2);
-            o[3] = ((ch & 3) << 6) | (fl >> 11);
-            o[4] = (fl >> 3) & 0xFF;
-            o[5] = ((fl & 7) << 5) | 0x1F;
-            o[6] = 0xFC;
-            o.set(data, 7);
-            return o;
-        }
-        function silence(p) {
-            const n = A.ch || 2;
-            playPCM(Array.from({ length: n }, () => new Float32Array(1024)), A.sr || 48000, p.ts);
-        }
-        // any libav sample array (f32 / s16 / s32 / u8 / f64) -> Float32Array in [-1, 1]
-        function toF32(a) {
-            if (a instanceof Float32Array) return a;
-            const o = new Float32Array(a.length);
-            if (a instanceof Uint8Array) { for (let i = 0; i < a.length; i++) o[i] = (a[i] - 128) / 128; return o; }
-            const k = a instanceof Int16Array ? 1 / 32768 : (a instanceof Int32Array ? 1 / 2147483648 : 1);
-            for (let i = 0; i < a.length; i++) o[i] = a[i] * k;
-            return o;
-        }
-        let wLogged = 0;
-        async function feedW(p) {
-            try {
-                const data = A.c === 'A_AAC' && A.p ? adts(p.data) : p.data;    // AC3/E-AC3/DTS/TrueHD packets go in raw
-                // ff_decode_multi copies frames out and unrefs packet/frame internally (no leak); decoder objects are reused
-                const fr = await la.ff_decode_multi(lc, lpkt, lfr, [{ data, pts: 0, ptshi: 0 }], { ignoreErrors: true });
-                if (!fr.length) { errT('WASM', 'decode returned 0 frames for a packet -> inserting silence'); silence(p); return; }
-                let t = p.ts;
-                for (const f of fr) {
-                    const d = f.data;
-                    const n = f.channels || f.ch_layout_nb_channels || (Array.isArray(d) ? d.length : (A.ch || 2));
-                    const L = f.nb_samples;
-                    if (wLogged < 3) {
-                        wLogged++;
-                        log('WASM', 'decoded frame: format', f.format, 'ch', n, 'sr', f.sample_rate, 'nb_samples', L,
-                            '| planar array:', Array.isArray(d), '| sample type:', (Array.isArray(d) ? d[0] : d).constructor.name);
-                    }
-                    let ch;
-                    if (Array.isArray(d)) ch = d.map(toF32);
-                    else {
-                        const all = toF32(d);
-                        ch = [];
-                        for (let c = 0; c < n; c++) {
-                            const x = new Float32Array(L);
-                            for (let i = 0; i < L; i++) x[i] = all[i * n + c];
-                            ch.push(x);
-                        }
-                    }
-                    if (!ch.length || !ch[0].length) continue;
-                    playPCM(ch, f.sample_rate, t);
-                    t += ch[0].length / f.sample_rate * 1e6;
-                }
-            } catch (e) { errT('WASM', 'per-packet decode threw -> inserting silence:', e && e.message || e); silence(p); }
-        }
-
-        async function onA(p) {
-            if (mode === 'n') { try { nat.decode(chunkA(p)); } catch (e) { errT('AUDIO', 'native decode() threw. state:', nat.state, e && e.name, e && e.message); } return; }
-            if (mode === 'w') { await feedW(p); return; }
-            if (mode === 'f') return;
-            pb.push(p);
-            if (pb.length < 3) return;                 // verification = real decode of 3 packets
-            log('AUDIO', 'collected 3 packets, verifying native decode (first ts', pb[0].ts, ')');
-            if (await tryNative(pb)) { mode = 'n'; pb = []; log('AUDIO', 'MODE = NATIVE (verified by real decode)'); return; }
-            try { await initWasm(); mode = 'w'; log('AUDIO', 'MODE = WASM fallback for', A.c); }
-            catch (e) { mode = 'f'; pb = []; err('AUDIO', 'MODE = FAILED. No audio will play. Reason:', e && e.message || e); return; }
-            const q = pb; pb = [];
-            for (const x of q) await feedW(x);
-        }
-
-        /* ---------- Range-streamed input with back-pressure ---------- */
-        const sleep = ms => new Promise(r => setTimeout(r, ms));
-        async function run() {
-            let off = 0, total = null, round = 0;
-            for (;;) {
-                round++;
-                const rng = 'bytes=' + off + '-';
-                log('NET', 'request #' + round, 'Range:', rng);
-                let res;
-                try { res = await fetch(SRC, { headers: { Range: rng } }); }
-                catch (e) { err('NET', 'fetch() FAILED (network error, CORS blocked, or mixed content):', e && e.message); return; }
-                log('NET', 'response: status', res.status, res.statusText, '| type', res.type,
-                    '| content-type', res.headers.get('content-type'),
-                    '| content-length', res.headers.get('content-length'),
-                    '| content-range', res.headers.get('content-range'),
-                    '| accept-ranges', res.headers.get('accept-ranges'));
-                if (res.status !== 200 && res.status !== 206) { err('NET', 'unexpected HTTP status', res.status, '- stopping'); return; }
-                if (res.status === 200 && off > 0) { err('NET', 'server ignored Range (200 instead of 206) while resuming at', off, '- stopping'); return; }
-                const cr = res.headers.get('content-range');
-                if (cr) { const m = /\/(\d+)\s*$/.exec(cr); if (m) total = +m[1]; }
-                else if (res.status === 200) { const cl = +res.headers.get('content-length'); if (cl) total = cl; }
-                else if (res.type === 'cors') log('NET', 'Content-Range not readable (server may lack Access-Control-Expose-Headers); total size unknown');
-                if (!res.body) { err('NET', 'response has no readable body stream'); return; }
-
-                const rdr = res.body.getReader();
-                const startOff = off;
-                for (;;) {
-                    // back-pressure: video queue, video decoder queue, audio decode lag, audio scheduled ahead
-                    while (!bad && (vq.length > 10 ||
-                           (vdec && vdec.decodeQueueSize > 12) ||
-                           aPending > 40 ||
-                           (nat && nat.decodeQueueSize > 30) ||
-                           (aEnd - actx.currentTime) > 20)) await sleep(40);
-                    if (bad) { try { rdr.cancel(); } catch (e) {} return; }
-                    let r;
-                    try { r = await rdr.read(); }
-                    catch (e) { err('NET', 'stream read error at byte', off, ':', e && e.message); return; }
-                    if (r.done) break;
-                    if (off === startOff) log('NET', 'first chunk of this request:', r.value.length, 'bytes | head:', hex(r.value, 16));
-                    off += r.value.length; C.bytes = off;
-                    push(r.value);
-                }
-                if (off === startOff) { err('NET', 'request returned 0 bytes - stopping'); return; }
-                if (total === null || off >= total) { log('NET', 'stream complete:', off, 'bytes'); return; }
-                log('NET', 'stream ended early at', off, 'of', total, '-> requesting the next range');
-            }
-        }
-
-        /* ---------- Render loop: draw the frame closest to the audio clock, then close it ---------- */
-        const fmt = s => {
-            s = Math.max(0, s | 0);
-            const h = (s / 3600) | 0, m = ((s - h * 3600) / 60) | 0, x = s - h * 3600 - m * 60;
-            return (h ? h + ':' + ('0' + m).slice(-2) : m) + ':' + ('0' + x).slice(-2);
-        };
-        let durShown = 0;
-        function loop() {
-            requestAnimationFrame(loop);
-            const dsec = durTicks ? durTicks * scale / 1e9 : 0;
-            if (dsec !== durShown) { durShown = dsec; durEl.textContent = fmt(dsec); }
-            if (base === null) return;
-            const c = Math.max(actx.currentTime - aT0, 0);
-            let best = null;
-            while (vq.length && (vq[0].timestamp - base) / 1e6 <= c) {
-                if (best) best.close();
-                best = vq.shift();
-            }
-            if (best) {
-                try { g.drawImage(best, 0, 0); C.vDrawn++; }
-                catch (e) { errT('VIDEO', 'drawImage failed', e && e.message); }
-                best.close();
-                if (C.vDrawn === 1) { log('VIDEO', 'FIRST FRAME DRAWN to canvas'); pl.classList.remove('loading'); }
-            }
-            tm.textContent = fmt(c);
-            fill.style.transform = 'scaleX(' + (dsec ? Math.min(1, c / dsec) : 0) + ')';
-        }
-
-        /* ---------- UI controls ---------- */
-        let playing = false, hideT = 0, muted = false;
-        function showCtl() {
-            pl.classList.remove('hide');
-            clearTimeout(hideT);
-            if (playing) hideT = setTimeout(() => pl.classList.add('hide'), 2500);
-        }
-        function setPlaying(v) { playing = v; pl.classList.toggle('playing', v); showCtl(); }
-        actx.onstatechange = () => { log('AUDIO', 'AudioContext state ->', actx.state); setPlaying(actx.state === 'running'); };
-
-        async function toggle() {
-            try {
-                if (actx.state === 'running') await actx.suspend();
-                else await actx.resume();          // resume on user gesture (autoplay policy)
-                log('UI', 'play/pause -> AudioContext state:', actx.state);
-            } catch (e) { err('UI', 'AudioContext suspend/resume FAILED:', e && e.message || e); }
-            setPlaying(actx.state === 'running');
-        }
-        pp.onclick = toggle; big.onclick = toggle; cv.onclick = toggle;
-        pl.addEventListener('mousemove', showCtl);
-        pl.addEventListener('touchstart', showCtl, { passive: true });
-        pl.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'k') { e.preventDefault(); toggle(); } });
-
-        muteBtn.onclick = () => {
-            muted = !muted;
-            mg.gain.value = muted ? 0 : 1;
-            pl.classList.toggle('muted', muted);
-        };
-        fsBtn.onclick = () => {
-            try {
-                if (document.fullscreenElement || document.webkitFullscreenElement) {
-                    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-                } else {
-                    const f = pl.requestFullscreen || pl.webkitRequestFullscreen;
-                    if (!f) { err('UI', 'Fullscreen API not supported on this browser'); return; }
-                    const r = f.call(pl);
-                    if (r && r.catch) r.catch(e => err('UI', 'fullscreen request rejected', e && e.message));
-                }
-            } catch (e) { err('UI', 'fullscreen threw', e && e.message); }
-        };
-        const fsChange = () => pl.classList.toggle('isfs', !!(document.fullscreenElement || document.webkitFullscreenElement));
-        document.addEventListener('fullscreenchange', fsChange);
-        document.addEventListener('webkitfullscreenchange', fsChange);
-
-        /* ---------- Debug: periodic stats + one-shot diagnosis (log only) ---------- */
-        let sN = 0;
-        const stTimer = setInterval(() => {
-            sN++;
-            log('STATS', JSON.stringify({
-                bytes: C.bytes, blocks: C.blocks, vIn: C.vIn, vOut: C.vOut, vDrawn: C.vDrawn,
-                vq: vq.length, vq0: vq.length && base !== null ? vq[0].timestamp - base : null, vPend: vPend.length,
-                vdec: vdec ? vdec.state : 'none', vdecQ: vdec ? vdec.decodeQueueSize : 0,
-                aIn: C.aIn, aOut: C.aOut, aLate: C.aLate, aMode: mode, aPending,
-                ctx: actx.state, clk: +(actx.currentTime - aT0).toFixed(2), base, aEnd: +aEnd.toFixed(2)
-            }));
-            if (sN >= 15) clearInterval(stTimer);
-        }, 2000);
-
-        setTimeout(() => {
-            if (C.vDrawn) return;
-            let why;
-            if (bad) why = 'file is not MKV (see MKV error above)';
-            else if (!C.bytes) why = 'no bytes received (network / CORS / HTTP error, see NET logs)';
-            else if (!sel) why = 'bytes received but no media blocks demuxed (bad EBML parse or header-only data)';
-            else if (!A) why = 'no audio track, so base was never set and video is held';
-            else if (base === null) why = 'audio track exists but no audio packet has been demuxed yet';
-            else if (!vdec) why = 'video decoder was never configured (see VIDEO logs)';
-            else if (!C.vIn) why = 'no video chunks were fed (no keyframe seen or wrong track number)';
-            else if (!C.vOut) why = 'video decoder produced no frames (codec/hardware unsupported or bad config record; check the VIDEO logs and isConfigSupported lines)';
-            else why = 'frames decoded but none drawn yet (audio clock not running? press play)';
-            err('WATCHDOG', 'DEBUG-ONLY: no frame drawn after 10s. Most likely cause:', why);
-        }, 10000);
-
-        loop();
-        run().catch(e => err('NET', 'run() crashed:', e && e.message || e));
-    });
     </script>
 </body>
 </html>
