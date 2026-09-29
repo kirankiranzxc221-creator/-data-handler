@@ -1,6 +1,3 @@
-The on-screen logger is added. Everything else is unchanged.
-
-```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -283,10 +280,12 @@ The on-screen logger is added. Everything else is unchanged.
     </script>
 
     <script>
-    /* ===== Zero-Storage HEVC player: MKV demux (Range stream) + WebCodecs, audio = master clock ===== */
-    // Self-host libav.js (an AAC-capable variant) with .wasm served as application/wasm and CSP allowing wasm-unsafe-eval.
+    /* ===== Zero-Storage H.264/HEVC player: MKV demux (Range stream) + WebCodecs, audio = master clock ===== */
+    // Self-hosted custom libav.js build (must include decoders: ac3, eac3, truehd, dca, plus aac if you want it).
+    // Serve the .wasm with Content-Type: application/wasm and allow wasm-unsafe-eval in the CSP.
     const LIBAV_BASE = "/libav/";
-    const LIBAV_JS = "/libav/libav-aac.js";
+    const LIBAV_JS = "/libav/libav.js";
+    const LIBAV_NOWORKER = false;        // false = decode in libav's own Web Worker (same-origin self-host); true = main thread
 
     /* ---------- ON-SCREEN DEBUG CONSOLE (fixed at the bottom of the screen; every [TRM] line lands here) ---------- */
     const LOGS = [];                                   // plain-text copy of everything shown
@@ -396,8 +395,11 @@ The on-screen logger is added. Everything else is unchanged.
         log('NET', 'source URL:', SRC, '| page origin:', location.origin);
 
         const actx = new (window.AudioContext || window.webkitAudioContext)();
-        const mg = actx.createGain(); mg.connect(actx.destination);
-        log('AUDIO', 'AudioContext created, state:', actx.state, 'sampleRate:', actx.sampleRate);
+        const mg = actx.createGain();
+        // force a stereo bus: 5.1 sources are downmixed with the standard Web Audio "speakers" coefficients
+        mg.channelCount = 2; mg.channelCountMode = 'explicit'; mg.channelInterpretation = 'speakers';
+        mg.connect(actx.destination);
+        log('AUDIO', 'AudioContext created, state:', actx.state, 'sampleRate:', actx.sampleRate, '| destination maxChannelCount:', actx.destination.maxChannelCount);
         actx.suspend().catch(e => err('AUDIO', 'initial suspend failed', e));
         const aT0 = actx.currentTime + 0.3;          // media time 0 == ctx time aT0 (pre-roll)
         let aEnd = 0;                                // ctx time where scheduled audio ends (back-pressure)
@@ -408,7 +410,7 @@ The on-screen logger is added. Everything else is unchanged.
 
         /* ---------- Matroska (EBML) streaming demuxer ---------- */
         const MASTER = {0x18538067:1,0x1654AE6B:1,0xAE:1,0xE0:1,0xE1:1,0x1F43B675:1,0xA0:1,0x1549A966:1};
-        const LEAF = new Set([0xA3,0xA1,0xE7,0xD7,0x83,0x86,0x63A2,0xB0,0xBA,0xB5,0x9F,0x2AD7B1,0x4489]);
+        const LEAF = new Set([0xA3,0xA1,0xE7,0xD7,0x83,0x86,0x63A2,0xB0,0xBA,0xB5,0x9F,0x2AD7B1,0x4489,0x88]);
         let buf = new Uint8Array(0), skip = 0, scale = 1000000, ctc = 0, durTicks = 0;
         let tks = [], cur = null, sel = false, V = null, A = null;
         let magic = false, bad = false;
@@ -478,6 +480,7 @@ The on-screen logger is added. Everything else is unchanged.
                 case 0xE7: ctc = u(); break;
                 case 0xD7: if (cur) cur.n = u(); break;
                 case 0x83: if (cur) cur.t = u(); break;
+                case 0x88: if (cur) cur.d = u(); break;          // FlagDefault (absent means default = 1)
                 case 0x86: if (cur) cur.c = new TextDecoder().decode(d); break;
                 case 0x63A2: if (cur) cur.p = d.slice(); break;
                 case 0xB0: if (cur) cur.w = u(); break;
@@ -508,17 +511,18 @@ The on-screen logger is added. Everything else is unchanged.
         function block(d, id) {
             if (!sel) {
                 sel = true;
-                V = tks.find(t => t.t === 1);   // first video track
-                A = tks.find(t => t.t === 2);   // default/first audio track only
+                V = tks.find(t => t.t === 1);                                             // first video track
+                A = tks.find(t => t.t === 2 && t.d !== 0) || tks.find(t => t.t === 2);    // default (else first) audio track only
                 log('MKV', 'timecodeScale(ns)', scale, '| duration ticks', durTicks, '| tracks found:', tks.length);
                 tks.forEach(t => {
-                    log('MKV', 'track', JSON.stringify({ n: t.n, type: t.t, codec: t.c, w: t.w, h: t.h, sr: t.sr, ch: t.ch, privLen: t.p ? t.p.length : 0 }),
+                    log('MKV', 'track', JSON.stringify({ n: t.n, type: t.t, codec: t.c, w: t.w, h: t.h, sr: t.sr, ch: t.ch, flagDefault: t.d, privLen: t.p ? t.p.length : 0 }),
                         '| CodecPrivate:', hex(t.p, 32));
                 });
                 if (!V) err('MKV', 'NO video track found');
-                else if (V.c !== 'V_MPEGH/ISO/HEVC') err('MKV', 'video codec is', V.c, '(not HEVC). hevc path will fail.');
+                else if (V.c !== 'V_MPEGH/ISO/HEVC' && V.c !== 'V_MPEG4/ISO/AVC') err('MKV', 'video codec is', V.c, '(only HEVC and H.264/AVC are handled)');
+                else log('MKV', 'video codec:', V.c, V.c === 'V_MPEG4/ISO/AVC' ? '(H.264, using avcC)' : '(HEVC, using hvcC)');
                 if (!A) err('MKV', 'NO audio track found. Audio is the master clock and base is set only by audio, so video will wait forever.');
-                else log('MKV', 'selected audio track: codec', A.c, 'sr', A.sr, 'ch', A.ch);
+                else log('MKV', 'selected audio track: number', A.n, 'codec', A.c, 'sr', A.sr, 'ch', A.ch);
             }
             const r = rd(d, 0, false); if (!r) return;
             const l = r[1], tn = r[0];
@@ -548,7 +552,7 @@ The on-screen logger is added. Everything else is unchanged.
             }
         }
 
-        /* ---------- Video (hardware WebCodecs; no fallback UI, silent freeze if unsupported) ---------- */
+        /* ---------- Video (hardware WebCodecs, H.264 + HEVC; no fallback UI, silent freeze if unsupported) ---------- */
         let vdec = null;
 
         // validated hvcC -> RFC 6381 codec string; returns null if the record looks malformed
@@ -565,6 +569,15 @@ The on-screen logger is added. Everything else is unchanged.
             } catch (e) { err('VIDEO', 'hevcStr() threw', e); return null; }
         }
 
+        // validated avcC -> "avc1.PPCCLL" (profile_idc, constraint flags, level_idc); null if malformed
+        function avcStr(h) {
+            try {
+                if (!h || h.length < 7 || h[0] !== 1) return null;    // configurationVersion must be 1
+                const x = n => ('0' + n.toString(16)).slice(-2);
+                return 'avc1.' + x(h[1]) + x(h[2]) + x(h[3]);
+            } catch (e) { err('VIDEO', 'avcStr() threw', e); return null; }
+        }
+
         function onFrame(f) {
             C.vOut++;
             if (C.vOut === 1) log('VIDEO', 'FIRST FRAME DECODED: ts', f.timestamp, 'coded', f.codedWidth + 'x' + f.codedHeight, 'format', f.format);
@@ -574,13 +587,16 @@ The on-screen logger is added. Everything else is unchanged.
         function initV() {
             vFail = true;                                   // stays true unless a configure() succeeds
             if (typeof VideoDecoder === 'undefined') { err('VIDEO', 'VideoDecoder is undefined (insecure context or unsupported browser)'); return; }
-            if (!V.p) err('VIDEO', 'video track has NO CodecPrivate (hvcC). configure() will fail.');
-            else log('VIDEO', 'hvcC bytes:', V.p.length, '|', hex(V.p, 40));
+            const isH = V.c === 'V_MPEGH/ISO/HEVC', isA = V.c === 'V_MPEG4/ISO/AVC';
+            if (!isH && !isA) { err('VIDEO', 'unsupported video codec', V.c, '- only HEVC and H.264/AVC are handled. Video will stay frozen.'); return; }
+            const recName = isH ? 'hvcC' : 'avcC';
+            if (!V.p) err('VIDEO', 'video track has NO CodecPrivate (' + recName + '). configure() will fail.');
+            else log('VIDEO', recName, 'bytes:', V.p.length, '|', hex(V.p, 40));
             try { cv.width = V.w; cv.height = V.h; } catch (e) { err('VIDEO', 'canvas resize failed', e); }
-            const gen = hevcStr(V.p);
+            const gen = isH ? hevcStr(V.p) : avcStr(V.p);
             log('VIDEO', 'generated codec string:', gen);
-            if (!gen) err('VIDEO', 'hvcC failed validation (length under 13 or version not 1)');
-            const cands = [gen, 'hvc1', 'hev1'].filter((x, i, a) => x && a.indexOf(x) === i);
+            if (!gen) err('VIDEO', recName + ' failed validation (too short or version not 1)');
+            const cands = (isH ? [gen, 'hvc1', 'hev1'] : [gen]).filter((x, i, a) => x && a.indexOf(x) === i);
 
             // DEBUG ONLY (never gates anything): log what the browser says about each candidate
             cands.forEach(codec => ['prefer-hardware', 'prefer-software'].forEach(hw => {
@@ -606,9 +622,11 @@ The on-screen logger is added. Everything else is unchanged.
             err('VIDEO', 'all codec candidates failed to configure. Video will stay frozen.');
         }
 
-        /* ---------- Audio: native AudioDecoder (verified by real decode) -> libav.js WASM fallback ---------- */
+        /* ---------- Audio: native AudioDecoder (verified by real decode) -> self-hosted libav.js WASM fallback ---------- */
+        // WebCodecs codec strings. Codecs missing here (DTS, TrueHD) have no native path and go straight to WASM.
         const NC = { A_AAC: 'mp4a.40.2', A_OPUS: 'opus', A_FLAC: 'flac', A_VORBIS: 'vorbis', A_AC3: 'ac-3', A_EAC3: 'ec-3', 'A_MPEG/L3': 'mp3' };
-        const LAV = { A_AAC: 'aac', A_AC3: 'ac3', A_EAC3: 'eac3', A_DTS: 'dca', 'A_MPEG/L3': 'mp3' };
+        // libav decoder names your custom build must contain
+        const LAV = { A_AAC: 'aac', A_AC3: 'ac3', A_EAC3: 'eac3', A_DTS: 'dca', A_TRUEHD: 'truehd', 'A_MPEG/L3': 'mp3' };
         let achain = Promise.resolve(), aPending = 0, mode = null, pb = [], probing = false;
         let nat = null, la = null, lc = null, lpkt = null, lfr = null;
 
@@ -651,8 +669,9 @@ The on-screen logger is added. Everything else is unchanged.
         const chunkA = p => new EncodedAudioChunk({ type: 'key', timestamp: p.ts, data: p.data });
 
         async function tryNative(pk) {
+            const codec = NC[A.c];
+            if (!codec) { log('AUDIO', 'no WebCodecs mapping for', A.c, '-> no native path, going straight to WASM'); return false; }
             if (typeof AudioDecoder === 'undefined') { err('AUDIO', 'AudioDecoder is undefined -> going to WASM'); return false; }
-            const codec = NC[A.c] || A.c;
             const cfg = { codec, sampleRate: A.sr || 48000, numberOfChannels: A.ch || 2, description: A.p };
             log('AUDIO', 'native probe: track', A.c, '-> WebCodecs codec', codec, '| sr', cfg.sampleRate, 'ch', cfg.numberOfChannels, '| description', hex(A.p, 8));
             try {
@@ -661,9 +680,10 @@ The on-screen logger is added. Everything else is unchanged.
                     .catch(e => err('AUDIO', 'isConfigSupported(debug) rejected', e && e.message));
             } catch (e) { err('AUDIO', 'isConfigSupported(debug) threw', e && e.message); }
             const outs = [];
+            let d = null;
             try {
                 probing = true;
-                const d = new AudioDecoder({
+                d = new AudioDecoder({
                     output: a => (probing ? outs.push(a) : playAD(a)),
                     error: e => err('AUDIO', 'AudioDecoder ERROR CALLBACK:', e && e.name, e && e.message)
                 });
@@ -684,17 +704,20 @@ The on-screen logger is added. Everything else is unchanged.
             } catch (e) {
                 probing = false;
                 outs.forEach(a => { try { a.close(); } catch (x) {} });
+                try { if (d) d.close(); } catch (x) {}
                 err('AUDIO', 'native probe THREW -> going to WASM:', e && e.name, e && e.message);
                 return false;
             }
         }
 
         async function initWasm() {
-            log('WASM', 'loading libav.js: script', LIBAV_JS, '| base', LIBAV_BASE);
+            const name = LAV[A.c];
+            if (!name) { err('WASM', 'no libav decoder mapping for audio codec', A.c, '(add it to the LAV table)'); throw new Error('no libav decoder for ' + A.c); }
+            log('WASM', 'loading self-hosted libav.js: script', LIBAV_JS, '| base', LIBAV_BASE, '| decoder needed:', name, '| noworker:', LIBAV_NOWORKER);
             try {
                 const r = await fetch(LIBAV_JS, { method: 'HEAD' });
                 log('WASM', 'HEAD', LIBAV_JS, '=> status', r.status, '| content-type', r.headers.get('content-type'));
-                if (!r.ok) err('WASM', 'libav script returned HTTP', r.status, '(wrong path? not deployed on this origin?)');
+                if (!r.ok) err('WASM', 'libav script returned HTTP', r.status, '(is /libav/ actually served by this origin?)');
             } catch (e) { err('WASM', 'HEAD', LIBAV_JS, 'failed (network / CORS / blocked):', e && e.message); }
             window.LibAV = { base: LIBAV_BASE };
             await new Promise((ok, no) => {
@@ -709,19 +732,18 @@ The on-screen logger is added. Everything else is unchanged.
                 throw new Error('LibAV.LibAV missing');
             }
             try {
-                la = await LibAV.LibAV();
+                la = await LibAV.LibAV(LIBAV_NOWORKER ? { noworker: true } : {});
                 log('WASM', 'LibAV instance created (wasm loaded)');
             } catch (e) {
-                err('WASM', 'LibAV.LibAV() FAILED. Usual causes: .wasm 404 under', LIBAV_BASE, '| wrong MIME (must be application/wasm) | CSP missing wasm-unsafe-eval | WebAssembly unsupported. Error:', e && e.message || e);
+                err('WASM', 'LibAV.LibAV() FAILED. Usual causes: .wasm/.wasm.js files missing under', LIBAV_BASE, '| wrong MIME (must be application/wasm) | CSP missing wasm-unsafe-eval | WebAssembly unsupported. Error:', e && e.message || e);
                 throw e;
             }
-            const name = LAV[A.c] || 'aac';
             try {
                 const r = await la.ff_init_decoder(name);
                 lc = r[1]; lpkt = r[2]; lfr = r[3];
                 log('WASM', 'decoder initialised:', name);
             } catch (e) {
-                err('WASM', 'ff_init_decoder(' + name + ') FAILED. This libav variant probably lacks that decoder:', e && e.message || e);
+                err('WASM', 'ff_init_decoder(' + name + ') FAILED. Your custom libav.js build does not contain the "' + name + '" decoder:', e && e.message || e);
                 throw e;
             }
         }
@@ -742,26 +764,44 @@ The on-screen logger is added. Everything else is unchanged.
             const n = A.ch || 2;
             playPCM(Array.from({ length: n }, () => new Float32Array(1024)), A.sr || 48000, p.ts);
         }
+        // any libav sample array (f32 / s16 / s32 / u8 / f64) -> Float32Array in [-1, 1]
+        function toF32(a) {
+            if (a instanceof Float32Array) return a;
+            const o = new Float32Array(a.length);
+            if (a instanceof Uint8Array) { for (let i = 0; i < a.length; i++) o[i] = (a[i] - 128) / 128; return o; }
+            const k = a instanceof Int16Array ? 1 / 32768 : (a instanceof Int32Array ? 1 / 2147483648 : 1);
+            for (let i = 0; i < a.length; i++) o[i] = a[i] * k;
+            return o;
+        }
         let wLogged = 0;
         async function feedW(p) {
             try {
-                const data = A.c === 'A_AAC' && A.p ? adts(p.data) : p.data;
+                const data = A.c === 'A_AAC' && A.p ? adts(p.data) : p.data;    // AC3/E-AC3/DTS/TrueHD packets go in raw
                 // ff_decode_multi copies frames out and unrefs packet/frame internally (no leak); decoder objects are reused
                 const fr = await la.ff_decode_multi(lc, lpkt, lfr, [{ data, pts: 0, ptshi: 0 }], { ignoreErrors: true });
                 if (!fr.length) { errT('WASM', 'decode returned 0 frames for a packet -> inserting silence'); silence(p); return; }
                 let t = p.ts;
                 for (const f of fr) {
-                    if (wLogged < 3) { wLogged++; log('WASM', 'decoded frame: format', f.format, 'ch', f.channels, 'sr', f.sample_rate, 'nb_samples', f.nb_samples, 'data is array:', Array.isArray(f.data)); }
-                    const d = f.data; let ch;
-                    if (Array.isArray(d)) ch = d;
+                    const d = f.data;
+                    const n = f.channels || f.ch_layout_nb_channels || (Array.isArray(d) ? d.length : (A.ch || 2));
+                    const L = f.nb_samples;
+                    if (wLogged < 3) {
+                        wLogged++;
+                        log('WASM', 'decoded frame: format', f.format, 'ch', n, 'sr', f.sample_rate, 'nb_samples', L,
+                            '| planar array:', Array.isArray(d), '| sample type:', (Array.isArray(d) ? d[0] : d).constructor.name);
+                    }
+                    let ch;
+                    if (Array.isArray(d)) ch = d.map(toF32);
                     else {
-                        const n = f.channels, L = f.nb_samples; ch = [];
+                        const all = toF32(d);
+                        ch = [];
                         for (let c = 0; c < n; c++) {
                             const x = new Float32Array(L);
-                            for (let i = 0; i < L; i++) x[i] = d[i * n + c];
+                            for (let i = 0; i < L; i++) x[i] = all[i * n + c];
                             ch.push(x);
                         }
                     }
+                    if (!ch.length || !ch[0].length) continue;
                     playPCM(ch, f.sample_rate, t);
                     t += ch[0].length / f.sample_rate * 1e6;
                 }
@@ -776,7 +816,7 @@ The on-screen logger is added. Everything else is unchanged.
             if (pb.length < 3) return;                 // verification = real decode of 3 packets
             log('AUDIO', 'collected 3 packets, verifying native decode (first ts', pb[0].ts, ')');
             if (await tryNative(pb)) { mode = 'n'; pb = []; log('AUDIO', 'MODE = NATIVE (verified by real decode)'); return; }
-            try { await initWasm(); mode = 'w'; log('AUDIO', 'MODE = WASM fallback'); }
+            try { await initWasm(); mode = 'w'; log('AUDIO', 'MODE = WASM fallback for', A.c); }
             catch (e) { mode = 'f'; pb = []; err('AUDIO', 'MODE = FAILED. No audio will play. Reason:', e && e.message || e); return; }
             const q = pb; pb = [];
             for (const x of q) await feedW(x);
@@ -926,7 +966,7 @@ The on-screen logger is added. Everything else is unchanged.
             else if (base === null) why = 'audio track exists but no audio packet has been demuxed yet';
             else if (!vdec) why = 'video decoder was never configured (see VIDEO logs)';
             else if (!C.vIn) why = 'no video chunks were fed (no keyframe seen or wrong track number)';
-            else if (!C.vOut) why = 'video decoder produced no frames (HEVC/hardware unsupported or bad hvcC; check the VIDEO logs and isConfigSupported lines)';
+            else if (!C.vOut) why = 'video decoder produced no frames (codec/hardware unsupported or bad config record; check the VIDEO logs and isConfigSupported lines)';
             else why = 'frames decoded but none drawn yet (audio clock not running? press play)';
             err('WATCHDOG', 'DEBUG-ONLY: no frame drawn after 10s. Most likely cause:', why);
         }, 10000);
@@ -937,16 +977,3 @@ The on-screen logger is added. Everything else is unchanged.
     </script>
 </body>
 </html>
-```
-
-**What the logger does**
-- It's a semi-transparent, scrollable panel fixed at the bottom of the screen, so the player stays visible above it.
-- Every `[TRM]` message appears in it, and errors are red and bold.
-- Buttons in its header:
-  - **Copy** copies the whole log as plain text, so you can paste it here.
-  - **Clear** empties it.
-  - **Min/Max** collapses or expands it.
-- It stays at the newest line unless you scroll up to read.
-- The same messages still go to the browser console, and it also captures uncaught JS errors, promise rejections and CSP blocks.
-- I added two fields to the `STATS` line to help find the deadlock: `clk` (the audio clock) and `vq0` (the timestamp of the oldest queued video frame, relative to the clock start).
-- The spinner appears after you press play and only clears once the first frame is drawn. So the logs from a run where you pressed play and it stayed on the spinner are what I need.
