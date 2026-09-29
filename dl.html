@@ -1,3 +1,6 @@
+The on-screen logger is added. Everything else is unchanged.
+
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -285,11 +288,86 @@
     const LIBAV_BASE = "/libav/";
     const LIBAV_JS = "/libav/libav-aac.js";
 
-    /* ---------- logging helpers: filter the console by "[TRM]" ---------- */
+    /* ---------- ON-SCREEN DEBUG CONSOLE (fixed at the bottom of the screen; every [TRM] line lands here) ---------- */
+    const LOGS = [];                                   // plain-text copy of everything shown
+    let dbgBody = null;
+    (function buildDebugUI() {
+        const box = document.createElement('div');
+        box.id = 'trmdbg';
+        box.style.cssText = 'position:fixed;left:6px;right:6px;bottom:6px;height:38vh;z-index:99999;display:flex;flex-direction:column;' +
+            'background:rgba(0,0,0,0.82);border:1px solid rgba(0,255,255,0.45);border-radius:8px;overflow:hidden;font-family:monospace;';
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;gap:6px;align-items:center;padding:4px 6px;background:rgba(0,40,50,0.95);color:#0ff;font-size:11px;flex:none;';
+        const title = document.createElement('span');
+        title.textContent = 'TRM debug';
+        title.style.cssText = 'flex:1;font-weight:bold;';
+        const mk = (label) => {
+            const b = document.createElement('button');
+            b.textContent = label;
+            b.style.cssText = 'background:#063;color:#fff;border:1px solid #0f8;border-radius:4px;font-size:11px;padding:4px 10px;';
+            return b;
+        };
+        const bCopy = mk('Copy'), bClr = mk('Clear'), bMin = mk('Min');
+        bar.appendChild(title); bar.appendChild(bCopy); bar.appendChild(bClr); bar.appendChild(bMin);
+        dbgBody = document.createElement('div');
+        dbgBody.style.cssText = 'flex:1;overflow:auto;padding:4px 6px;font-size:10px;line-height:1.35;color:#cfe;white-space:pre-wrap;' +
+            'word-break:break-all;user-select:text;-webkit-user-select:text;-webkit-overflow-scrolling:touch;';
+        box.appendChild(bar); box.appendChild(dbgBody);
+        document.body.appendChild(box);
+
+        bClr.onclick = () => { LOGS.length = 0; dbgBody.textContent = ''; };
+        bMin.onclick = () => {
+            const hidden = dbgBody.style.display === 'none';
+            dbgBody.style.display = hidden ? 'block' : 'none';
+            box.style.height = hidden ? '38vh' : 'auto';
+            bMin.textContent = hidden ? 'Min' : 'Max';
+        };
+        bCopy.onclick = () => {
+            const text = LOGS.join('\n');
+            const fallback = () => {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+                    document.body.appendChild(ta); ta.focus(); ta.select();
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    bCopy.textContent = ok ? 'Copied!' : 'Copy failed';
+                } catch (e) { bCopy.textContent = 'Copy failed'; }
+                setTimeout(() => { bCopy.textContent = 'Copy'; }, 1500);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text)
+                    .then(() => { bCopy.textContent = 'Copied!'; setTimeout(() => { bCopy.textContent = 'Copy'; }, 1500); })
+                    .catch(fallback);
+            } else fallback();
+        };
+    })();
+
+    function ui(line, isErr) {
+        LOGS.push(line);
+        if (LOGS.length > 1500) LOGS.shift();
+        if (!dbgBody) return;
+        const nearBottom = dbgBody.scrollHeight - dbgBody.scrollTop - dbgBody.clientHeight < 40;
+        const d = document.createElement('div');
+        d.textContent = line;                                  // textContent: no HTML injection
+        d.style.color = isErr ? '#ff5555' : '#cfe';
+        if (isErr) d.style.fontWeight = 'bold';
+        dbgBody.appendChild(d);
+        while (dbgBody.childNodes.length > 600) dbgBody.removeChild(dbgBody.firstChild);
+        if (nearBottom) dbgBody.scrollTop = dbgBody.scrollHeight;
+    }
+
+    /* ---------- logging helpers: console + on-screen, filter the console by "[TRM]" ---------- */
     const T0 = performance.now();
     const stamp = t => '[TRM][' + t + ' +' + Math.round(performance.now() - T0) + 'ms]';
-    const log = (t, ...a) => console.log(stamp(t), ...a);
-    const err = (t, ...a) => console.error(stamp(t), ...a);
+    const argStr = a => {
+        if (typeof a === 'string') return a;
+        if (a instanceof Error) return a.name + ': ' + a.message;
+        if (a && typeof a === 'object' && a.message) return String(a.name || 'Error') + ': ' + a.message;
+        try { return JSON.stringify(a); } catch (e) { return String(a); }
+    };
+    const log = (t, ...a) => { console.log(stamp(t), ...a); ui(stamp(t) + ' ' + a.map(argStr).join(' '), false); };
+    const err = (t, ...a) => { console.error(stamp(t), ...a); ui('ERR ' + stamp(t) + ' ' + a.map(argStr).join(' '), true); };
     const eN = {};
     const errT = (t, ...a) => {                      // throttled error: first 5 only
         eN[t] = (eN[t] || 0) + 1;
@@ -301,6 +379,7 @@
     window.addEventListener('unhandledrejection', e => err('PROMISE', e.reason && (e.reason.message || e.reason)));
     document.addEventListener('securitypolicyviolation', e => err('CSP', 'blocked:', e.blockedURI, 'directive:', e.violatedDirective));
 
+    log('LOGGER', 'on-screen debug console ready');
     log('ENV', 'secureContext', window.isSecureContext,
         '| VideoDecoder', typeof VideoDecoder, '| AudioDecoder', typeof AudioDecoder,
         '| EncodedVideoChunk', typeof EncodedVideoChunk,
@@ -823,18 +902,18 @@
         document.addEventListener('fullscreenchange', fsChange);
         document.addEventListener('webkitfullscreenchange', fsChange);
 
-        /* ---------- Debug: periodic stats + one-shot diagnosis (log only, no UI) ---------- */
+        /* ---------- Debug: periodic stats + one-shot diagnosis (log only) ---------- */
         let sN = 0;
         const stTimer = setInterval(() => {
             sN++;
             log('STATS', JSON.stringify({
                 bytes: C.bytes, blocks: C.blocks, vIn: C.vIn, vOut: C.vOut, vDrawn: C.vDrawn,
-                vq: vq.length, vPend: vPend.length,
+                vq: vq.length, vq0: vq.length && base !== null ? vq[0].timestamp - base : null, vPend: vPend.length,
                 vdec: vdec ? vdec.state : 'none', vdecQ: vdec ? vdec.decodeQueueSize : 0,
                 aIn: C.aIn, aOut: C.aOut, aLate: C.aLate, aMode: mode, aPending,
-                ctx: actx.state, ctxTime: +actx.currentTime.toFixed(2), base, aEnd: +aEnd.toFixed(2)
+                ctx: actx.state, clk: +(actx.currentTime - aT0).toFixed(2), base, aEnd: +aEnd.toFixed(2)
             }));
-            if (sN >= 20) clearInterval(stTimer);
+            if (sN >= 15) clearInterval(stTimer);
         }, 2000);
 
         setTimeout(() => {
@@ -858,3 +937,16 @@
     </script>
 </body>
 </html>
+```
+
+**What the logger does**
+- It's a semi-transparent, scrollable panel fixed at the bottom of the screen, so the player stays visible above it.
+- Every `[TRM]` message appears in it, and errors are red and bold.
+- Buttons in its header:
+  - **Copy** copies the whole log as plain text, so you can paste it here.
+  - **Clear** empties it.
+  - **Min/Max** collapses or expands it.
+- It stays at the newest line unless you scroll up to read.
+- The same messages still go to the browser console, and it also captures uncaught JS errors, promise rejections and CSP blocks.
+- I added two fields to the `STATS` line to help find the deadlock: `clk` (the audio clock) and `vq0` (the timestamp of the oldest queued video frame, relative to the clock start).
+- The spinner appears after you press play and only clears once the first frame is drawn. So the logs from a run where you pressed play and it stayed on the spinner are what I need.
