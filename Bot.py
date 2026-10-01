@@ -1,11 +1,14 @@
 import os
 import re
+import json
 import html
+import base64
 import string
 import random
 import asyncio
 import logging
 import secrets
+import binascii
 import urllib.parse
 import aiohttp
 from aiohttp import web
@@ -35,18 +38,63 @@ WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-DL_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dl.html")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DL_HTML_PATH = os.path.join(BASE_DIR, "dl.html")
+SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
 
 URL_REGEX = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
-# Matches any /watch/<id> link regardless of domain.
-# Group 1 = domain, Group 2 = short id.
-FILETOLINK_URL_REGEX = re.compile(r"https?://([a-zA-Z0-9.-]+)/watch/([A-Za-z0-9_-]+)")
+# Matches any /watch/<id> link regardless of domain, plus an optional query string.
+# Group 1 = domain, Group 2 = short id, Group 3 = query string (without "?") or None.
+FILETOLINK_URL_REGEX = re.compile(r"https?://([a-zA-Z0-9.-]+)/watch/([A-Za-z0-9_-]+)(?:\?(\S*))?")
+
+# Only characters that can legitimately appear in a hostname (same set the
+# FILETOLINK_URL_REGEX domain group allows).
+DOMAIN_REGEX = re.compile(r"[a-zA-Z0-9.-]+")
 
 DEFAULT_FALLBACK_FILENAME = "Video.mkv"
 
+# ---------------- SETTINGS / CLEANER CONFIG ----------------
+SETTINGS_BUTTON_TEXT = "⚙️ Settings"
+MAIN_REPLY_KEYBOARD = {
+    "keyboard": [[{"text": SETTINGS_BUTTON_TEXT}]],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
+CB_SET_PREFIX = "set_prefix"
+CB_SET_BLACKLIST = "set_blacklist"
+
+STATE_AWAIT_PREFIX = "await_prefix"
+STATE_AWAIT_BLACKLIST = "await_blacklist"
+
+MAX_PREFIX_LEN = 100
+MAX_BLACKLIST_ENTRIES = 50
+MAX_BLACKLIST_ENTRY_LEN = 40
+
+CLEAR_WORDS = {"none", "clear", "off", "remove", "delete", "-"}
+
+# Any word starting with @ (e.g. @123_321, @kirankiss). Not matched when glued
+# to a preceding letter/digit (emails like a@b.com) or to a "/" (URLs like
+# medium.com/@user), so those are left alone.
+USERNAME_REGEX = re.compile(r"(?<![A-Za-z0-9/])@[A-Za-z0-9_]+")
+
+# Empty bracket pairs left behind after a removal, e.g. "[@user]" -> "[]".
+EMPTY_BRACKETS_REGEX = re.compile(r"\[[\s_.\-]*\]|\([\s_.\-]*\)|\{[\s_.\-]*\}")
+
+# Decides if a blacklist entry is URL/domain-like (removed together with the
+# whole URL token in captions) or a plain word (removed on word boundaries).
+URLISH_REGEX = re.compile(r"^(?:https?://|www\.)|/|^[^\s/]+\.[A-Za-z]{2,}$", re.IGNORECASE)
+
+# Protects the /watch/ link from the cleaners while the rest of the caption is
+# processed. Contains no letters/digits/whitespace, so nothing can match it.
+LINK_PLACEHOLDER = "\ue000\ue001\ue000"
+
 # In-memory state: user_id -> pending URL waiting for a filename
 pending_urls = {}
+
+# In-memory state: user_id -> which settings input the bot is waiting for
+user_states = {}
 
 _session: aiohttp.ClientSession | None = None
 
@@ -118,7 +166,7 @@ async def set_webhook():
             "url": webhook_url,
             "secret_token": WEBHOOK_SECRET,
             "drop_pending_updates": True,
-            "allowed_updates": ["message", "channel_post"],
+            "allowed_updates": ["message", "channel_post", "callback_query"],
         },
     )
     logger.info(f"[SET WEBHOOK] url={webhook_url} result={result}")
@@ -154,6 +202,309 @@ async def shrink_url(long_url: str) -> str:
     return shortened
 
 
+# ---------------- STEALTH MODE (BASE64 DOMAIN) ----------------
+
+def encode_domain(domain: str) -> str:
+    """URL-safe base64 of the domain, with '=' padding stripped (re-added on decode)."""
+    return base64.urlsafe_b64encode(domain.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_domain(value: str) -> str | None:
+    """Reverse of encode_domain. Returns None if the value isn't a valid hostname."""
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    except (binascii.Error, UnicodeError, ValueError):
+        return None
+
+    decoded = decoded.strip()
+    if decoded and DOMAIN_REGEX.fullmatch(decoded):
+        return decoded
+    return None
+
+
+# ---------------- USER SETTINGS (settings.json) ----------------
+
+_settings_cache: dict | None = None
+
+
+def _load_settings() -> dict:
+    global _settings_cache
+    if _settings_cache is not None:
+        return _settings_cache
+
+    data: dict = {}
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            data = loaded
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as e:
+        logger.warning(f"[SETTINGS] Could not read {SETTINGS_PATH}: {e}")
+
+    _settings_cache = data
+    return data
+
+
+def _save_settings(data: dict) -> bool:
+    tmp_path = SETTINGS_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, SETTINGS_PATH)
+        return True
+    except OSError as e:
+        logger.error(f"[SETTINGS] Could not write {SETTINGS_PATH}: {e}")
+        return False
+
+
+def get_user_settings(user_id) -> dict:
+    """Returns {"prefix": str, "blacklist": list[str]} for a user (safe defaults if unset)."""
+    entry = _load_settings().get(str(user_id), {})
+    if not isinstance(entry, dict):
+        entry = {}
+
+    prefix = entry.get("prefix", "")
+    if not isinstance(prefix, str):
+        prefix = ""
+
+    raw_blacklist = entry.get("blacklist", [])
+    if not isinstance(raw_blacklist, list):
+        raw_blacklist = []
+    blacklist = [w for w in raw_blacklist if isinstance(w, str) and w.strip()]
+
+    return {"prefix": prefix.strip(), "blacklist": blacklist}
+
+
+def update_user_settings(user_id, **changes) -> bool:
+    """Updates a user's settings in memory and on disk. Returns False if the disk write failed."""
+    data = _load_settings()
+    entry = data.get(str(user_id))
+    if not isinstance(entry, dict):
+        entry = {}
+    entry.update(changes)
+    data[str(user_id)] = entry
+    return _save_settings(data)
+
+
+# ---------------- NAME & CAPTION CLEANER ----------------
+
+def remove_blacklisted(text: str, blacklist: list[str], expand_urls: bool) -> str:
+    """
+    Removes blacklisted words/URLs (case-insensitive).
+      - Plain words: matched on word boundaries, where "_", ".", "-" and spaces
+        all count as boundaries (so "Movie_TamilMV_1080p" works).
+      - URL/domain-like entries: in captions (expand_urls=True) the whole URL
+        token is removed (e.g. "https://t.me/chan" is removed completely even
+        if the blacklist only has "t.me/chan"); in filenames only the matched
+        text is removed.
+    """
+    for entry in sorted(blacklist, key=len, reverse=True):
+        if not entry:
+            continue
+        escaped = re.escape(entry)
+        if URLISH_REGEX.search(entry):
+            pattern = rf"\S*{escaped}\S*" if expand_urls else escaped
+        else:
+            pattern = rf"(?<![^\W_]){escaped}(?![^\W_])"
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    return text
+
+
+def tidy_name(text: str) -> str:
+    """Cleans leftovers (empty brackets, double spaces, doubled underscores) from a filename stem."""
+    text = EMPTY_BRACKETS_REGEX.sub("", text)
+    text = re.sub(r"[ _]{2,}", lambda m: "_" if "_" in m.group(0) else " ", text)
+    text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip(" \t_.-")
+
+
+def clean_file_name(file_name: str, settings: dict) -> str:
+    """
+    Pipeline for the file name:
+      1) remove @usernames, 2) remove blacklisted words, 3) tidy leftovers,
+      4) prepend the auto prefix. The extension is never touched.
+    """
+    name = file_name or ""
+    stem, ext = name, ""
+    root, suffix = os.path.splitext(name)
+    if root and re.fullmatch(r"\.[A-Za-z0-9]{1,5}", suffix):
+        stem, ext = root, suffix
+
+    cleaned = USERNAME_REGEX.sub("", stem)
+    cleaned = remove_blacklisted(cleaned, settings["blacklist"], expand_urls=False)
+    if cleaned != stem:
+        cleaned = tidy_name(cleaned)
+    stem = cleaned
+
+    prefix = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", settings["prefix"]).strip()
+    if prefix:
+        stem = f"{prefix} {stem}".strip()
+
+    if not stem:
+        stem = "Video"
+
+    result = stem + ext
+    # Path separators / control characters never belong in a file name.
+    result = re.sub(r"[\\/\x00-\x1f]", "", result)
+    return result or DEFAULT_FALLBACK_FILENAME
+
+
+def clean_caption(text: str, settings: dict) -> str:
+    """
+    Pipeline for the caption, line by line: remove @usernames, remove
+    blacklisted words/URLs, then tidy only the lines that were actually changed
+    (lines that become empty are dropped). Untouched lines stay exactly as is.
+    """
+    cleaned_lines = []
+    for line in text.split("\n"):
+        new_line = USERNAME_REGEX.sub("", line)
+        new_line = remove_blacklisted(new_line, settings["blacklist"], expand_urls=True)
+
+        if new_line != line:
+            new_line = EMPTY_BRACKETS_REGEX.sub("", new_line)
+            new_line = re.sub(r"[ \t]{2,}", " ", new_line)
+            new_line = re.sub(r"_{2,}", "_", new_line)
+            new_line = new_line.strip(" \t_")
+            if not new_line:
+                continue
+
+        cleaned_lines.append(new_line)
+
+    return "\n".join(cleaned_lines)
+
+
+# ---------------- SETTINGS MENU UI ----------------
+
+def is_settings_request(text: str) -> bool:
+    normalized = text.replace("\ufe0f", "").strip().lower()
+    return (
+        normalized in {"⚙ settings", "settings", "/settings"}
+        or normalized.startswith("/settings@")
+    )
+
+
+def parse_blacklist_input(raw: str) -> list[str]:
+    """Comma/newline separated entries (phrases allowed); plain whitespace-separated if neither is used."""
+    raw = raw.strip()
+    if raw.lower() in CLEAR_WORDS:
+        return []
+
+    if re.search(r"[,\n]", raw):
+        parts = re.split(r"[,\n]+", raw)
+    else:
+        parts = raw.split()
+
+    seen = set()
+    entries = []
+    for part in parts:
+        part = part.strip()[:MAX_BLACKLIST_ENTRY_LEN]
+        if not part:
+            continue
+        key = part.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(part)
+        if len(entries) >= MAX_BLACKLIST_ENTRIES:
+            break
+    return entries
+
+
+async def send_settings_menu(chat_id: int, user_id: int):
+    settings = get_user_settings(user_id)
+
+    prefix_display = html.escape(settings["prefix"]) if settings["prefix"] else "<i>not set</i>"
+
+    if settings["blacklist"]:
+        joined = ", ".join(settings["blacklist"])
+        if len(joined) > 700:
+            joined = joined[:700] + "…"
+        blacklist_display = html.escape(joined)
+    else:
+        blacklist_display = "<i>not set</i>"
+
+    text = (
+        "⚙️ <b>Settings</b>\n\n"
+        f"<b>Auto Prefix:</b> {prefix_display}\n"
+        f"<b>Blacklist:</b> {blacklist_display}"
+    )
+    reply_markup = {
+        "inline_keyboard": [
+            [{"text": "Set Auto Prefix", "callback_data": CB_SET_PREFIX}],
+            [{"text": "Set Blacklist Words", "callback_data": CB_SET_BLACKLIST}],
+        ]
+    }
+    await send_message(chat_id, text, reply_markup)
+
+
+async def handle_callback_query(callback_query: dict):
+    callback_id = callback_query.get("id")
+    user_id = (callback_query.get("from") or {}).get("id")
+    data = callback_query.get("data")
+    chat_id = ((callback_query.get("message") or {}).get("chat") or {}).get("id")
+
+    # Always acknowledge, otherwise the button shows a loading spinner.
+    if callback_id:
+        await tg_call("answerCallbackQuery", {"callback_query_id": callback_id})
+
+    if user_id is None or chat_id is None:
+        return
+
+    if data == CB_SET_PREFIX:
+        pending_urls.pop(user_id, None)
+        user_states[user_id] = STATE_AWAIT_PREFIX
+        await send_message(
+            chat_id,
+            "Send me the text to use as <b>Auto Prefix</b> (added to the start of file names and captions).\n\n"
+            "Send <code>none</code> to remove it, or /cancel to keep the current one.",
+        )
+    elif data == CB_SET_BLACKLIST:
+        pending_urls.pop(user_id, None)
+        user_states[user_id] = STATE_AWAIT_BLACKLIST
+        await send_message(
+            chat_id,
+            "Send me the <b>Blacklist words/URLs</b> to remove from file names and captions, "
+            "separated by commas or new lines.\n\n"
+            "This replaces your current list. Send <code>none</code> to clear it, or /cancel to keep it.",
+        )
+
+
+async def handle_settings_input(chat_id: int, user_id: int, state: str, text: str):
+    if state == STATE_AWAIT_PREFIX:
+        value = " ".join(text.split())
+        if value.lower() in CLEAR_WORDS:
+            saved = update_user_settings(user_id, prefix="")
+            reply = "✅ Auto Prefix removed."
+        else:
+            trimmed = len(value) > MAX_PREFIX_LEN
+            value = value[:MAX_PREFIX_LEN].strip()
+            saved = update_user_settings(user_id, prefix=value)
+            reply = f"✅ Auto Prefix saved: <b>{html.escape(value)}</b>"
+            if trimmed:
+                reply += f"\n(Trimmed to {MAX_PREFIX_LEN} characters.)"
+    elif state == STATE_AWAIT_BLACKLIST:
+        entries = parse_blacklist_input(text)
+        saved = update_user_settings(user_id, blacklist=entries)
+        if entries:
+            shown = ", ".join(entries)
+            if len(shown) > 700:
+                shown = shown[:700] + "…"
+            reply = f"✅ Blacklist saved ({len(entries)}): {html.escape(shown)}"
+        else:
+            reply = "✅ Blacklist cleared."
+    else:
+        return
+
+    if not saved:
+        reply += "\n\n⚠️ Couldn't write to disk, so this may be lost when the bot restarts."
+
+    await send_message(chat_id, reply)
+
+
 # ---------------- FILE-TO-LINK MESSAGE HANDLING ----------------
 
 def extract_media_file_name(message: dict) -> str | None:
@@ -178,11 +529,13 @@ def has_media(message: dict) -> bool:
 async def handle_filetolink_message(message: dict):
     """
     Processes a message/caption that contains one or more /watch/<id> links:
-      - builds a fresh watch URL using the media's real file name (or a
-        fallback for plain text),
+      - cleans the file name and caption (@usernames, blacklist, auto prefix),
+      - builds a fresh watch URL using the cleaned file name (or a fallback
+        for plain text), hiding the external domain as base64,
+      - preserves any original query string (e.g. ?hash=...) of the link,
       - shortens it via shrinkme.io,
-      - swaps only the matched substring for the shortened URL, leaving the
-        rest of the text untouched,
+      - swaps only the matched link for the shortened URL, leaving the rest
+        of the text untouched,
       - reposts the payload (copying media, or sending plain text) with an
         inline "Watch online & Download" button.
     """
@@ -200,28 +553,50 @@ async def handle_filetolink_message(message: dict):
     if not match:
         return
 
-    matched_url = match.group(0)
     extracted_domain = match.group(1)
     short_id = match.group(2)
 
-    file_name = extract_media_file_name(message) or DEFAULT_FALLBACK_FILENAME
+    user_id = (message.get("from") or {}).get("id")
+    settings = get_user_settings(user_id)
+
+    # --- Name cleaning (usernames -> blacklist -> tidy -> prefix) ---
+    raw_file_name = extract_media_file_name(message) or DEFAULT_FALLBACK_FILENAME
+    file_name = clean_file_name(raw_file_name, settings)
     encoded_name = urllib.parse.quote_plus(file_name)
-    encoded_domain = urllib.parse.quote_plus(extracted_domain)
+
+    # Stealth mode: the external domain is never sent in plain text.
+    b64_domain = encode_domain(extracted_domain)
 
     # External domain Workers don't run the /watch/ HTML proxy themselves, so
     # the link points at the central proxy worker (WORKER_BASE_URL), passing
-    # the external domain through explicitly so Render can build a /dl/ link
-    # back to it.
-    base_url = f"{WORKER_BASE_URL}/watch/{short_id}?name={encoded_name}&domain={encoded_domain}"
+    # the (base64-hidden) external domain through explicitly so Render can
+    # build a /dl/ link back to it.
+    orig_query = match.group(3) or ""
+
+    base_url = f"{WORKER_BASE_URL}/watch/{short_id}?name={encoded_name}&b64_domain={b64_domain}"
+    if orig_query:
+        base_url += f"&orig_query={urllib.parse.quote_plus(orig_query)}"
 
     shortened_url = await shrink_url(base_url)
 
-    # Escape the original text for HTML first (so stray < or & in captions
-    # don't break the parser), then replace only the matched URL substring
-    # — matched against its escaped form — with the shortened URL. Spacing,
-    # emojis, and everything else stays untouched.
-    safe_text = html.escape(original_text)
-    new_text = safe_text.replace(html.escape(matched_url), shortened_url)
+    # --- Caption cleaning ---
+    # The matched link is swapped for a placeholder first so the cleaners can
+    # never touch it; the placeholder is replaced with the shortened URL at
+    # the end. Everything else is HTML-escaped (so stray < or & in captions
+    # don't break the parser), including the auto prefix.
+    text_with_placeholder = (
+        original_text[: match.start()] + LINK_PLACEHOLDER + original_text[match.end():]
+    )
+    cleaned_text = clean_caption(text_with_placeholder, settings)
+
+    if LINK_PLACEHOLDER not in cleaned_text:
+        cleaned_text = f"{cleaned_text}\n{LINK_PLACEHOLDER}".strip()
+
+    if settings["prefix"]:
+        cleaned_text = f"{settings['prefix']} {cleaned_text}"
+
+    safe_text = html.escape(cleaned_text)
+    new_text = safe_text.replace(LINK_PLACEHOLDER, html.escape(shortened_url, quote=False))
 
     reply_markup = {
         "inline_keyboard": [[{"text": "Watch online & Download", "url": base_url}]]
@@ -257,12 +632,43 @@ async def handle_message(message: dict):
     # Route messages/captions that already contain a /watch/<id> link to the
     # dedicated file-to-link handler, regardless of domain.
     if FILETOLINK_URL_REGEX.search(text) or FILETOLINK_URL_REGEX.search(caption):
+        # The user moved on from any pending settings prompt.
+        user_states.pop(user_id, None)
         await handle_filetolink_message(message)
+        return
+
+    command = ""
+    if text.startswith("/"):
+        command = text.split(maxsplit=1)[0].split("@")[0].lower()
+
+    # Settings menu (reply keyboard button or /settings)
+    if is_settings_request(text):
+        pending_urls.pop(user_id, None)
+        user_states.pop(user_id, None)
+        await send_settings_menu(chat_id, user_id)
         return
 
     if text.startswith("/start"):
         pending_urls.pop(user_id, None)
-        await send_message(chat_id, "Send me a direct URL to begin.")
+        user_states.pop(user_id, None)
+        await send_message(
+            chat_id,
+            "Send me a direct URL to begin.\n\nUse <b>⚙️ Settings</b> to set an auto prefix and blacklist words.",
+            MAIN_REPLY_KEYBOARD,
+        )
+        return
+
+    if command == "/cancel":
+        had_state = user_states.pop(user_id, None) is not None
+        had_pending = pending_urls.pop(user_id, None) is not None
+        await send_message(chat_id, "Cancelled." if (had_state or had_pending) else "Nothing to cancel.")
+        return
+
+    # Waiting for a settings value (prefix / blacklist)
+    state = user_states.get(user_id)
+    if state and text:
+        user_states.pop(user_id, None)
+        await handle_settings_input(chat_id, user_id, state, text)
         return
 
     # Case 1: user is replying with a filename for a previously sent URL
@@ -347,6 +753,13 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
     logger.info(f"[UPDATE RECEIVED] {update.get('update_id')}")
 
+    callback_query = update.get("callback_query")
+    if callback_query:
+        try:
+            await handle_callback_query(callback_query)
+        except Exception as e:
+            logger.exception(f"[HANDLE_CALLBACK ERROR] {e}")
+
     message = update.get("message") or update.get("channel_post")
     if message:
         try:
@@ -373,13 +786,36 @@ async def watch_handler(request: web.Request) -> web.Response:
     except FileNotFoundError:
         return web.Response(status=500, text="dl.html template not found on server")
 
+    # Stealth mode: the external domain arrives base64-encoded (b64_domain).
+    # The old plain "domain" param is still accepted so links already posted
+    # keep working. Either way the value must be a valid hostname.
+    target_domain = None
+    b64_domain = request.query.get("b64_domain")
+    if b64_domain:
+        target_domain = decode_domain(b64_domain)
+        if not target_domain:
+            return web.Response(status=400, text="Invalid domain parameter")
+    else:
+        legacy_domain = request.query.get("domain")
+        if legacy_domain:
+            if not DOMAIN_REGEX.fullmatch(legacy_domain):
+                return web.Response(status=400, text="Invalid domain parameter")
+            target_domain = legacy_domain
+
     # Dynamic forwarded links (with a domain param) use /dl/; manually
     # registered links still go through the primary worker's /stream/.
-    target_domain = request.query.get("domain")
     if target_domain:
         # Dynamic forwarded links: /dl/ for streaming, /dl/?dl=1 for download.
-        stream_url = f"https://{target_domain}/dl/{short_id}"
-        download_url = f"https://{target_domain}/dl/{short_id}?dl=1"
+        # If the original link carried a query string (e.g. hash=...), keep it
+        # and append dl=1 with "&" instead of "?".
+        orig_query = (request.query.get("orig_query") or "").lstrip("?").strip()
+        base_stream = f"https://{target_domain}/dl/{short_id}"
+        if orig_query:
+            stream_url = f"{base_stream}?{orig_query}"
+            download_url = f"{base_stream}?{orig_query}&dl=1"
+        else:
+            stream_url = base_stream
+            download_url = f"{base_stream}?dl=1"
     else:
         # Manual registered links use /stream/ for streaming, and ?dl=1 to
         # force a download disposition instead of inline playback.
