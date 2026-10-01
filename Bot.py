@@ -459,7 +459,7 @@ async def handle_callback_query(callback_query: dict):
         user_states[user_id] = STATE_AWAIT_PREFIX
         await send_message(
             chat_id,
-            "Send me the text to use as <b>Auto Prefix</b> (added to the start of file names and captions).\n\n"
+            "Send me the text to use as <b>Auto Prefix</b> (added to the start of file names).\n\n"
             "Send <code>none</code> to remove it, or /cancel to keep the current one.",
         )
     elif data == CB_SET_BLACKLIST:
@@ -529,7 +529,9 @@ def has_media(message: dict) -> bool:
 async def handle_filetolink_message(message: dict):
     """
     Processes a message/caption that contains one or more /watch/<id> links:
-      - cleans the file name and caption (@usernames, blacklist, auto prefix),
+      - cleans the file name (@usernames, blacklist, auto prefix) and the
+        caption (@usernames, blacklist only; the prefix is NOT added to the
+        visible message),
       - builds a fresh watch URL using the cleaned file name (or a fallback
         for plain text), hiding the external domain as base64,
       - preserves any original query string (e.g. ?hash=...) of the link,
@@ -579,11 +581,11 @@ async def handle_filetolink_message(message: dict):
 
     shortened_url = await shrink_url(base_url)
 
-    # --- Caption cleaning ---
+    # --- Caption cleaning (no auto prefix here) ---
     # The matched link is swapped for a placeholder first so the cleaners can
     # never touch it; the placeholder is replaced with the shortened URL at
     # the end. Everything else is HTML-escaped (so stray < or & in captions
-    # don't break the parser), including the auto prefix.
+    # don't break the parser).
     text_with_placeholder = (
         original_text[: match.start()] + LINK_PLACEHOLDER + original_text[match.end():]
     )
@@ -591,9 +593,6 @@ async def handle_filetolink_message(message: dict):
 
     if LINK_PLACEHOLDER not in cleaned_text:
         cleaned_text = f"{cleaned_text}\n{LINK_PLACEHOLDER}".strip()
-
-    if settings["prefix"]:
-        cleaned_text = f"{settings['prefix']} {cleaned_text}"
 
     safe_text = html.escape(cleaned_text)
     new_text = safe_text.replace(LINK_PLACEHOLDER, html.escape(shortened_url, quote=False))
@@ -680,6 +679,11 @@ async def handle_message(message: dict):
             pending_urls[user_id] = url
             await send_message(chat_id, "Filename can't be empty. Please enter a valid filename (with extension).")
             return
+
+        # Apply the user's cleaners (@usernames, blacklist) and Auto Prefix to
+        # the manually typed filename before it is registered / URL-encoded.
+        settings = get_user_settings(user_id)
+        filename = clean_file_name(filename, settings)
 
         status = await send_message(chat_id, "Registering your link, please wait...")
         status_message_id = status.get("result", {}).get("message_id")
