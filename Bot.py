@@ -76,19 +76,15 @@ CLEAR_WORDS = {"none", "clear", "off", "remove", "delete", "-"}
 
 # Any word starting with @ (e.g. @123_321, @kirankiss). Not matched when glued
 # to a preceding letter/digit (emails like a@b.com) or to a "/" (URLs like
-# medium.com/@user), so those are left alone.
+# medium.com/@user), so those are left alone. Used on FILE NAMES only.
 USERNAME_REGEX = re.compile(r"(?<![A-Za-z0-9/])@[A-Za-z0-9_]+")
 
 # Empty bracket pairs left behind after a removal, e.g. "[@user]" -> "[]".
 EMPTY_BRACKETS_REGEX = re.compile(r"\[[\s_.\-]*\]|\([\s_.\-]*\)|\{[\s_.\-]*\}")
 
-# Decides if a blacklist entry is URL/domain-like (removed together with the
-# whole URL token in captions) or a plain word (removed on word boundaries).
+# Decides if a blacklist entry is URL/domain-like or a plain word (plain words
+# are removed on word boundaries).
 URLISH_REGEX = re.compile(r"^(?:https?://|www\.)|/|^[^\s/]+\.[A-Za-z]{2,}$", re.IGNORECASE)
-
-# Protects the /watch/ link from the cleaners while the rest of the caption is
-# processed. Contains no letters/digits/whitespace, so nothing can match it.
-LINK_PLACEHOLDER = "\ue000\ue001\ue000"
 
 # In-memory state: user_id -> pending URL waiting for a filename
 pending_urls = {}
@@ -289,24 +285,21 @@ def update_user_settings(user_id, **changes) -> bool:
     return _save_settings(data)
 
 
-# ---------------- NAME & CAPTION CLEANER ----------------
+# ---------------- FILE NAME CLEANER ----------------
 
-def remove_blacklisted(text: str, blacklist: list[str], expand_urls: bool) -> str:
+def remove_blacklisted(text: str, blacklist: list[str]) -> str:
     """
-    Removes blacklisted words/URLs (case-insensitive).
-      - Plain words: matched on word boundaries, where "_", ".", "-" and spaces
-        all count as boundaries (so "Movie_TamilMV_1080p" works).
-      - URL/domain-like entries: in captions (expand_urls=True) the whole URL
-        token is removed (e.g. "https://t.me/chan" is removed completely even
-        if the blacklist only has "t.me/chan"); in filenames only the matched
-        text is removed.
+    Removes blacklisted words/URLs from a file name (case-insensitive).
+    Plain words are matched on word boundaries, where "_", ".", "-" and spaces
+    all count as boundaries (so "Movie_TamilMV_1080p" works). URL/domain-like
+    entries are removed as the exact matched text.
     """
     for entry in sorted(blacklist, key=len, reverse=True):
         if not entry:
             continue
         escaped = re.escape(entry)
         if URLISH_REGEX.search(entry):
-            pattern = rf"\S*{escaped}\S*" if expand_urls else escaped
+            pattern = escaped
         else:
             pattern = rf"(?<![^\W_]){escaped}(?![^\W_])"
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
@@ -335,7 +328,7 @@ def clean_file_name(file_name: str, settings: dict) -> str:
         stem, ext = root, suffix
 
     cleaned = USERNAME_REGEX.sub("", stem)
-    cleaned = remove_blacklisted(cleaned, settings["blacklist"], expand_urls=False)
+    cleaned = remove_blacklisted(cleaned, settings["blacklist"])
     if cleaned != stem:
         cleaned = tidy_name(cleaned)
     stem = cleaned
@@ -351,30 +344,6 @@ def clean_file_name(file_name: str, settings: dict) -> str:
     # Path separators / control characters never belong in a file name.
     result = re.sub(r"[\\/\x00-\x1f]", "", result)
     return result or DEFAULT_FALLBACK_FILENAME
-
-
-def clean_caption(text: str, settings: dict) -> str:
-    """
-    Pipeline for the caption, line by line: remove @usernames, remove
-    blacklisted words/URLs, then tidy only the lines that were actually changed
-    (lines that become empty are dropped). Untouched lines stay exactly as is.
-    """
-    cleaned_lines = []
-    for line in text.split("\n"):
-        new_line = USERNAME_REGEX.sub("", line)
-        new_line = remove_blacklisted(new_line, settings["blacklist"], expand_urls=True)
-
-        if new_line != line:
-            new_line = EMPTY_BRACKETS_REGEX.sub("", new_line)
-            new_line = re.sub(r"[ \t]{2,}", " ", new_line)
-            new_line = re.sub(r"_{2,}", "_", new_line)
-            new_line = new_line.strip(" \t_")
-            if not new_line:
-                continue
-
-        cleaned_lines.append(new_line)
-
-    return "\n".join(cleaned_lines)
 
 
 # ---------------- SETTINGS MENU UI ----------------
@@ -467,7 +436,7 @@ async def handle_callback_query(callback_query: dict):
         user_states[user_id] = STATE_AWAIT_BLACKLIST
         await send_message(
             chat_id,
-            "Send me the <b>Blacklist words/URLs</b> to remove from file names and captions, "
+            "Send me the <b>Blacklist words/URLs</b> to remove from file names, "
             "separated by commas or new lines.\n\n"
             "This replaces your current list. Send <code>none</code> to clear it, or /cancel to keep it.",
         )
@@ -529,15 +498,14 @@ def has_media(message: dict) -> bool:
 async def handle_filetolink_message(message: dict):
     """
     Processes a message/caption that contains one or more /watch/<id> links:
-      - cleans the file name (@usernames, blacklist, auto prefix) and the
-        caption (@usernames, blacklist only; the prefix is NOT added to the
-        visible message),
-      - builds a fresh watch URL using the cleaned file name (or a fallback
-        for plain text), hiding the external domain as base64,
+      - cleans ONLY the file name (@usernames, blacklist, auto prefix) used to
+        build the watch URL,
+      - builds a fresh watch URL using that file name (or a fallback for plain
+        text), hiding the external domain as base64,
       - preserves any original query string (e.g. ?hash=...) of the link,
       - shortens it via shrinkme.io,
-      - swaps only the matched link for the shortened URL, leaving the rest
-        of the text untouched,
+      - swaps ONLY the matched link for the shortened URL; the rest of the
+        caption/message text is kept exactly as received (no cleaning),
       - reposts the payload (copying media, or sending plain text) with an
         inline "Watch online & Download" button.
     """
@@ -561,7 +529,7 @@ async def handle_filetolink_message(message: dict):
     user_id = (message.get("from") or {}).get("id")
     settings = get_user_settings(user_id)
 
-    # --- Name cleaning (usernames -> blacklist -> tidy -> prefix) ---
+    # --- File name cleaning (usernames -> blacklist -> tidy -> prefix) ---
     raw_file_name = extract_media_file_name(message) or DEFAULT_FALLBACK_FILENAME
     file_name = clean_file_name(raw_file_name, settings)
     encoded_name = urllib.parse.quote_plus(file_name)
@@ -581,21 +549,13 @@ async def handle_filetolink_message(message: dict):
 
     shortened_url = await shrink_url(base_url)
 
-    # --- Caption cleaning (no auto prefix here) ---
-    # The matched link is swapped for a placeholder first so the cleaners can
-    # never touch it; the placeholder is replaced with the shortened URL at
-    # the end. Everything else is HTML-escaped (so stray < or & in captions
-    # don't break the parser).
-    text_with_placeholder = (
-        original_text[: match.start()] + LINK_PLACEHOLDER + original_text[match.end():]
-    )
-    cleaned_text = clean_caption(text_with_placeholder, settings)
-
-    if LINK_PLACEHOLDER not in cleaned_text:
-        cleaned_text = f"{cleaned_text}\n{LINK_PLACEHOLDER}".strip()
-
-    safe_text = html.escape(cleaned_text)
-    new_text = safe_text.replace(LINK_PLACEHOLDER, html.escape(shortened_url, quote=False))
+    # The caption/message text is NOT cleaned or modified in any way. Only the
+    # matched link is replaced by the shortened URL. The text before and after
+    # the link is HTML-escaped (required by parse_mode HTML so stray < or &
+    # don't break the message) but otherwise kept exactly as received.
+    before_link = html.escape(original_text[: match.start()])
+    after_link = html.escape(original_text[match.end():])
+    new_text = f"{before_link}{html.escape(shortened_url, quote=False)}{after_link}"
 
     reply_markup = {
         "inline_keyboard": [[{"text": "Watch online & Download", "url": base_url}]]
