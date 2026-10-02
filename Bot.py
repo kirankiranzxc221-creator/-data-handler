@@ -64,9 +64,12 @@ MAIN_REPLY_KEYBOARD = {
 
 CB_SET_PREFIX = "set_prefix"
 CB_SET_BLACKLIST = "set_blacklist"
+CB_CLEAR_PREFIX = "clear_prefix"
+CB_REMOVE_BLACKLIST_WORD = "remove_blacklist_word"
 
 STATE_AWAIT_PREFIX = "await_prefix"
 STATE_AWAIT_BLACKLIST = "await_blacklist"
+STATE_AWAIT_REMOVE_BLACKLIST = "await_remove_blacklist"
 
 MAX_PREFIX_LEN = 100
 MAX_BLACKLIST_ENTRIES = 50
@@ -405,6 +408,8 @@ async def send_settings_menu(chat_id: int, user_id: int):
         "inline_keyboard": [
             [{"text": "Set Auto Prefix", "callback_data": CB_SET_PREFIX}],
             [{"text": "Set Blacklist Words", "callback_data": CB_SET_BLACKLIST}],
+            [{"text": "🗑 Clear Auto Prefix", "callback_data": CB_CLEAR_PREFIX}],
+            [{"text": "➖ Remove Blacklist Word", "callback_data": CB_REMOVE_BLACKLIST_WORD}],
         ]
     }
     await send_message(chat_id, text, reply_markup)
@@ -440,6 +445,19 @@ async def handle_callback_query(callback_query: dict):
             "separated by commas or new lines.\n\n"
             "This replaces your current list. Send <code>none</code> to clear it, or /cancel to keep it.",
         )
+    elif data == CB_CLEAR_PREFIX:
+        saved = update_user_settings(user_id, prefix="")
+        reply = "✅ Auto Prefix cleared."
+        if not saved:
+            reply += "\n\n⚠️ Couldn't write to disk, so this may be lost when the bot restarts."
+        await send_message(chat_id, reply)
+    elif data == CB_REMOVE_BLACKLIST_WORD:
+        pending_urls.pop(user_id, None)
+        user_states[user_id] = STATE_AWAIT_REMOVE_BLACKLIST
+        await send_message(
+            chat_id,
+            "Send the exact word/URL you want to remove from your blacklist.",
+        )
 
 
 async def handle_settings_input(chat_id: int, user_id: int, state: str, text: str):
@@ -465,6 +483,18 @@ async def handle_settings_input(chat_id: int, user_id: int, state: str, text: st
             reply = f"✅ Blacklist saved ({len(entries)}): {html.escape(shown)}"
         else:
             reply = "✅ Blacklist cleared."
+    elif state == STATE_AWAIT_REMOVE_BLACKLIST:
+        target = text.strip()
+        target_display = html.escape(target[:100])
+        current = get_user_settings(user_id)["blacklist"]
+        remaining = [w for w in current if w.lower() != target.lower()]
+
+        if len(remaining) == len(current):
+            await send_message(chat_id, f"❌ <b>{target_display}</b> was not found in your blacklist.")
+            return
+
+        saved = update_user_settings(user_id, blacklist=remaining)
+        reply = f"✅ Removed <b>{target_display}</b> from your blacklist."
     else:
         return
 
@@ -663,11 +693,15 @@ async def handle_message(message: dict):
         # domain — Render is never exposed to the browser.
         watch_url = f"{WORKER_BASE_URL}/watch/{short_id}?name={encoded_name}"
 
+        # The shortened link is used ONLY in the message text. The inline
+        # button below keeps the direct Worker watch_url.
+        shortened_url = await shrink_url(watch_url)
+
         reply_markup = {
             "inline_keyboard": [[{"text": "▶️ Watch / Download", "url": watch_url}]]
         }
 
-        final_text = f"Your link is ready!\n\n<b>Filename:</b> {html.escape(filename)}\n<b>Link:</b> {watch_url}"
+        final_text = f"Your link is ready!\n\n<b>Filename:</b> {html.escape(filename)}\n<b>Link:</b> {shortened_url}"
         if status_message_id:
             await edit_message(chat_id, status_message_id, final_text, reply_markup)
         else:
