@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="https://cdn.plyr.io/3.6.12/plyr.css" />
     <style>
         /* Change this ONE value later to match the image's real black */
-        :root { --page-bg: #060912; }
+        :root { --page-bg: #040710; }
 
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
@@ -21,10 +21,12 @@
             font-family: sans-serif;
         }
 
-        /* TOP SLICE: bottom edge melts away with an eased (curved) fade */
+        /* TOP SLICE: bottom edge melts away with an eased (curved) fade.
+           The negative margin-bottom pulls the title and player up into the empty fade area. */
         .header-box {
             width: 100%%;
             aspect-ratio: 864 / 288;
+            margin-bottom: -8%%;
             background: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center top / 100%% auto no-repeat;
             -webkit-mask-image: linear-gradient(to bottom,
                 rgba(0,0,0,1) 0%%,
@@ -51,6 +53,8 @@
         }
 
         .movie-title {
+            position: relative;
+            z-index: 1;
             width: 90%%;
             text-align: center;
             color: #00ffff;
