@@ -10,52 +10,23 @@
         html, body { margin: 0; padding: 0; }
         html { background: #060912; }
         body {
-            position: relative;
-            z-index: 0;
-            min-height: 100vh;
             background-color: #060912;
+            min-height: 100vh;
             display: flex;
             flex-direction: column;
             align-items: center;
             font-family: sans-serif;
         }
 
-        /* Top slice (W=864, TOP=220): full width, anchored to the top.
-           Its bottom edge fades into transparency, blending into #060912. */
-        body::before {
-            content: "";
-            position: absolute;
-            top: 0;
-            left: 0;
+        /* TOP SLICE: taller header (W=864, 380 image-px) so the Joker faces and logos fit.
+           The height scales with screen width, so nothing is cropped on the sides.
+           Its bottom edge fades into the solid #060912 middle. */
+        .header-box {
             width: 100%%;
             aspect-ratio: 864 / 288;
             background: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center top / 100%% auto no-repeat;
             -webkit-mask-image: linear-gradient(to bottom, #000 0%%, #000 70%%, transparent 100%%);
             mask-image: linear-gradient(to bottom, #000 0%%, #000 70%%, transparent 100%%);
-            z-index: -1;
-            pointer-events: none;
-        }
-
-        /* Bottom slice (W=864, BOT=190): full width, anchored to the bottom.
-           Its top edge fades into transparency, blending into #060912. */
-        body::after {
-            content: "";
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 100%%;
-            aspect-ratio: 864 / 190;
-            background: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center bottom / 100%% auto no-repeat;
-            -webkit-mask-image: linear-gradient(to top, #000 0%%, #000 70%%, transparent 100%%);
-            mask-image: linear-gradient(to top, #000 0%%, #000 70%%, transparent 100%%);
-            z-index: -1;
-            pointer-events: none;
-        }
-
-        .header-box {
-            width: 100%%;
-            aspect-ratio: 3.4 / 1;
-            background: transparent;
         }
 
         .movie-title {
@@ -136,7 +107,7 @@
             flex-direction: column;
             width: 90%%;
             max-width: 380px;
-            margin: 4%% auto 5%% auto;
+            margin: 4%% auto 0 auto;
         }
 
         .btn-img {
@@ -155,11 +126,15 @@
         }
         .btn-img:last-child { margin-bottom: 0; }
 
-        .footer-box {
+        /* BOTTOM SLICE: a normal block that follows the buttons (no screen anchoring).
+           W=864, BOT=190. Shows the bottom 190 image-px, and its top edge fades into #060912. */
+        .footer-slice {
             width: 100%%;
-            aspect-ratio: 3.2 / 1;
-            background: transparent;
-            margin-top: auto;
+            aspect-ratio: 864 / 190;
+            margin-top: 4%%;
+            background: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center bottom / 100%% auto no-repeat;
+            -webkit-mask-image: linear-gradient(to bottom, transparent 0%%, #000 30%%, #000 100%%);
+            mask-image: linear-gradient(to bottom, transparent 0%%, #000 30%%, #000 100%%);
         }
     </style>
 </head>
@@ -189,7 +164,7 @@
         <a id="link-mx" href="#"><img src="https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Mx_Player.webp" class="btn-img" alt="PLAY IN MX Player"></a>
     </div>
 
-    <div class="footer-box"></div>
+    <div class="footer-slice"></div>
 
     <script src="https://cdn.plyr.io/3.6.12/plyr.js"></script>
     <script>
