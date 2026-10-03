@@ -9,6 +9,7 @@
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
         body {
+            position: relative;
             background-color: #060912;
             min-height: 100vh;
             display: flex;
@@ -17,18 +18,15 @@
             font-family: sans-serif;
         }
 
-        /* Fixed background layer: stable on iPhone Safari and in-app browsers */
+        /* Background layer: full image width, anchored to the top, scrolls with the page.
+           Any space below the image blends into the body color (#060912). */
         body::before {
             content: "";
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%%;
-            height: 100vh;
-            height: 100lvh;
+            position: absolute;
+            inset: 0;
             background-image: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp');
-            background-size: cover;
-            background-position: center;
+            background-size: 100%% auto;
+            background-position: center top;
             background-repeat: no-repeat;
             z-index: -1;
             pointer-events: none;
