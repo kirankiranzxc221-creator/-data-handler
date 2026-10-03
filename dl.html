@@ -6,11 +6,14 @@
     <title>%s</title>
     <link rel="stylesheet" href="https://cdn.plyr.io/3.6.12/plyr.css" />
     <style>
+        /* Change this ONE value later to match the image's real black */
+        :root { --page-bg: #060912; }
+
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
-        html { background: #060912; }
+        html { background: var(--page-bg); }
         body {
-            background-color: #060912;
+            background-color: var(--page-bg);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
@@ -18,15 +21,33 @@
             font-family: sans-serif;
         }
 
-        /* TOP SLICE: taller header (W=864, 380 image-px) so the Joker faces and logos fit.
-           The height scales with screen width, so nothing is cropped on the sides.
-           Its bottom edge fades into the solid #060912 middle. */
+        /* TOP SLICE: bottom edge melts away with an eased (curved) fade */
         .header-box {
             width: 100%%;
             aspect-ratio: 864 / 288;
             background: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center top / 100%% auto no-repeat;
-            -webkit-mask-image: linear-gradient(to bottom, #000 0%%, #000 70%%, transparent 100%%);
-            mask-image: linear-gradient(to bottom, #000 0%%, #000 70%%, transparent 100%%);
+            -webkit-mask-image: linear-gradient(to bottom,
+                rgba(0,0,0,1) 0%%,
+                rgba(0,0,0,1) 55%%,
+                rgba(0,0,0,0.92) 62%%,
+                rgba(0,0,0,0.78) 69%%,
+                rgba(0,0,0,0.58) 76%%,
+                rgba(0,0,0,0.38) 83%%,
+                rgba(0,0,0,0.20) 89%%,
+                rgba(0,0,0,0.08) 94%%,
+                rgba(0,0,0,0.02) 97%%,
+                rgba(0,0,0,0) 100%%);
+            mask-image: linear-gradient(to bottom,
+                rgba(0,0,0,1) 0%%,
+                rgba(0,0,0,1) 55%%,
+                rgba(0,0,0,0.92) 62%%,
+                rgba(0,0,0,0.78) 69%%,
+                rgba(0,0,0,0.58) 76%%,
+                rgba(0,0,0,0.38) 83%%,
+                rgba(0,0,0,0.20) 89%%,
+                rgba(0,0,0,0.08) 94%%,
+                rgba(0,0,0,0.02) 97%%,
+                rgba(0,0,0,0) 100%%);
         }
 
         .movie-title {
@@ -126,15 +147,34 @@
         }
         .btn-img:last-child { margin-bottom: 0; }
 
-        /* BOTTOM SLICE: a normal block that follows the buttons (no screen anchoring).
-           W=864, BOT=190. Shows the bottom 190 image-px, and its top edge fades into #060912. */
+        /* BOTTOM SLICE: follows the buttons; top edge fades in with an eased (curved) fade */
         .footer-slice {
             width: 100%%;
             aspect-ratio: 864 / 190;
             margin-top: 4%%;
             background: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center bottom / 100%% auto no-repeat;
-            -webkit-mask-image: linear-gradient(to bottom, transparent 0%%, #000 30%%, #000 100%%);
-            mask-image: linear-gradient(to bottom, transparent 0%%, #000 30%%, #000 100%%);
+            -webkit-mask-image: linear-gradient(to bottom,
+                rgba(0,0,0,0) 0%%,
+                rgba(0,0,0,0.02) 3%%,
+                rgba(0,0,0,0.08) 6%%,
+                rgba(0,0,0,0.20) 11%%,
+                rgba(0,0,0,0.38) 17%%,
+                rgba(0,0,0,0.58) 24%%,
+                rgba(0,0,0,0.78) 31%%,
+                rgba(0,0,0,0.92) 38%%,
+                rgba(0,0,0,1) 45%%,
+                rgba(0,0,0,1) 100%%);
+            mask-image: linear-gradient(to bottom,
+                rgba(0,0,0,0) 0%%,
+                rgba(0,0,0,0.02) 3%%,
+                rgba(0,0,0,0.08) 6%%,
+                rgba(0,0,0,0.20) 11%%,
+                rgba(0,0,0,0.38) 17%%,
+                rgba(0,0,0,0.58) 24%%,
+                rgba(0,0,0,0.78) 31%%,
+                rgba(0,0,0,0.92) 38%%,
+                rgba(0,0,0,1) 45%%,
+                rgba(0,0,0,1) 100%%);
         }
     </style>
 </head>
