@@ -13,16 +13,15 @@
             position: relative;
             z-index: 0;
             min-height: 100vh;
-            /* Middle layer: same image, blown up 10x in height so only a thin band
-               from the image center shows, stretched to fill the space between top and bottom */
-            background: #060912 url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center 50%% / 100%% 1000%% no-repeat;
+            background-color: #060912;
             display: flex;
             flex-direction: column;
             align-items: center;
             font-family: sans-serif;
         }
 
-        /* Top slice (W=864, TOP=220): full width, anchored to the top, never stretched */
+        /* Top slice (W=864, TOP=220): full width, anchored to the top.
+           Its bottom edge fades into transparency, blending into #060912. */
         body::before {
             content: "";
             position: absolute;
@@ -30,12 +29,15 @@
             left: 0;
             width: 100%%;
             aspect-ratio: 864 / 220;
-            background: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center top / 100%% auto no-repeat;
+            background: url('YOUR_NEW_FULL_IMAGE_LINK_HERE') center top / 100%% auto no-repeat;
+            -webkit-mask-image: linear-gradient(to bottom, #000 0%%, #000 70%%, transparent 100%%);
+            mask-image: linear-gradient(to bottom, #000 0%%, #000 70%%, transparent 100%%);
             z-index: -1;
             pointer-events: none;
         }
 
-        /* Bottom slice (W=864, BOT=190): full width, anchored to the bottom, never stretched */
+        /* Bottom slice (W=864, BOT=190): full width, anchored to the bottom.
+           Its top edge fades into transparency, blending into #060912. */
         body::after {
             content: "";
             position: absolute;
@@ -43,7 +45,9 @@
             left: 0;
             width: 100%%;
             aspect-ratio: 864 / 190;
-            background: url('https://cdn.jsdelivr.net/gh/trm-admin/-data-handler@main/images/Background.webp') center bottom / 100%% auto no-repeat;
+            background: url('YOUR_NEW_FULL_IMAGE_LINK_HERE') center bottom / 100%% auto no-repeat;
+            -webkit-mask-image: linear-gradient(to top, #000 0%%, #000 70%%, transparent 100%%);
+            mask-image: linear-gradient(to top, #000 0%%, #000 70%%, transparent 100%%);
             z-index: -1;
             pointer-events: none;
         }
